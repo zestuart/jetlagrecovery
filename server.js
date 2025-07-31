@@ -12,10 +12,67 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
+// Test endpoint for API token validation
+app.get('/api/oura/test', async (req, res) => {
+  try {
+    const { authorization } = req.headers;
+    
+    if (!authorization) {
+      return res.status(401).json({ error: 'Authorization header required' });
+    }
+    
+    console.log('Testing Ōura API connection...');
+    
+    const response = await axios.get('https://api.ouraring.com/v2/usercollection/personal_info', {
+      headers: {
+        'Authorization': authorization,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    console.log('API test successful for user:', response.data.email);
+    
+    res.json({ 
+      status: 'success',
+      userInfo: {
+        email: response.data.email,
+        age: response.data.age,
+        weight: response.data.weight,
+        height: response.data.height
+      },
+      message: 'API token validated successfully'
+    });
+    
+  } catch (error) {
+    console.error('API test failed:', error.message);
+    
+    if (error.response?.status === 401) {
+      res.status(401).json({ 
+        error: 'Invalid API token. Please check your Ōura token.',
+        status: 401 
+      });
+    } else if (error.response?.status === 429) {
+      res.status(429).json({ 
+        error: 'Rate limit exceeded. Please wait a moment and try again.',
+        status: 429 
+      });
+    } else {
+      res.status(error.response?.status || 500).json({ 
+        error: error.message,
+        status: error.response?.status || 500
+      });
+    }
+  }
+});
+
 // Ōura API proxy endpoints
 app.get('/api/oura/personal_info', async (req, res) => {
   try {
     const { authorization } = req.headers;
+    
+    if (!authorization) {
+      return res.status(401).json({ error: 'Authorization header required' });
+    }
     
     const response = await axios.get('https://api.ouraring.com/v2/usercollection/personal_info', {
       headers: {
@@ -39,6 +96,10 @@ app.get('/api/oura/sleep/:date', async (req, res) => {
     const { date } = req.params;
     const { authorization } = req.headers;
     
+    if (!authorization) {
+      return res.status(401).json({ error: 'Authorization header required' });
+    }
+    
     const response = await axios.get(`https://api.ouraring.com/v2/usercollection/sleep?start_date=${date}&end_date=${date}`, {
       headers: {
         'Authorization': authorization,
@@ -61,6 +122,10 @@ app.get('/api/oura/readiness/:date', async (req, res) => {
     const { date } = req.params;
     const { authorization } = req.headers;
     
+    if (!authorization) {
+      return res.status(401).json({ error: 'Authorization header required' });
+    }
+    
     const response = await axios.get(`https://api.ouraring.com/v2/usercollection/daily_readiness?start_date=${date}&end_date=${date}`, {
       headers: {
         'Authorization': authorization,
@@ -82,6 +147,10 @@ app.get('/api/oura/heartrate/:date', async (req, res) => {
   try {
     const { date } = req.params;
     const { authorization } = req.headers;
+    
+    if (!authorization) {
+      return res.status(401).json({ error: 'Authorization header required' });
+    }
     
     const response = await axios.get(`https://api.ouraring.com/v2/usercollection/heartrate?start_datetime=${date}T00:00:00&end_datetime=${date}T23:59:59`, {
       headers: {
@@ -133,7 +202,7 @@ app.get('/api/oura/combined/:date', async (req, res) => {
     const sleep = sleepData.data && sleepData.data.length > 0 ? sleepData.data[0] : null;
     const readiness = readinessData.data && readinessData.data.length > 0 ? readinessData.data[0] : null;
     
-    // Calculate nighttime resting heart rate
+    // Calculate nighttime resting heart rate (22:00 - 06:00)
     let avgRestingHr = null;
     if (heartrateData.data && heartrateData.data.length > 0) {
       const nighttimeHR = heartrateData.data.filter(hr => {
@@ -170,7 +239,9 @@ app.get('/api/oura/combined/:date', async (req, res) => {
       hasSleep: result.dataQuality.hasSleep,
       hasReadiness: result.dataQuality.hasReadiness,
       hasHeartRate: result.dataQuality.hasHeartRate,
-      hrDataPoints: result.heartrate.dataPoints
+      hrDataPoints: result.heartrate.dataPoints,
+      sleepEfficiency: sleep?.efficiency || 'N/A',
+      tempDeviation: readiness?.temperature_trend_deviation || 'N/A'
     });
 
     res.json(result);
@@ -185,11 +256,42 @@ app.get('/api/oura/combined/:date', async (req, res) => {
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    version: '1.0.0'
+  });
+});
+
+// Root endpoint redirect
+app.get('/', (req, res) => {
+  res.redirect('/index.html');
+});
+
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('Server error:', error);
+  res.status(500).json({ 
+    error: 'Internal server error',
+    message: error.message 
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: 'Endpoint not found',
+    path: req.path 
+  });
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Jet Lag Tracker server running on http://localhost:${PORT}`);
   console.log(`📊 Access the app at http://localhost:${PORT}`);
+  console.log(`🔍 Available endpoints:`);
+  console.log(`   GET /api/health - Health check`);
+  console.log(`   GET /api/oura/test - Test API token`);
+  console.log(`   GET /api/oura/personal_info - User information`);
+  console.log(`   GET /api/oura/combined/:date - Combined data for date`);
 });
-

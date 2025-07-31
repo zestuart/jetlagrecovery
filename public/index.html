@@ -15,12 +15,6 @@
     </style>
 </head>
 <body class="gradient-bg min-h-screen">
-    <div id="loading" class="flex items-center justify-center min-h-screen">
-        <div class="text-center">
-            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-            <p class="text-gray-600">Loading Jet Lag Tracker...</p>
-        </div>
-    </div>
     <div id="root"></div>
     
     <script type="text/babel">
@@ -207,7 +201,7 @@
 
                     const result = await response.json();
                     setDebugInfo(prev => prev + `\nAPI Test Successful! User: ${result.userInfo.email}`);
-                    setError(''); // Clear any previous errors
+                    setError('');
                     alert('✅ Local API working! Token validated successfully.');
                     
                 } catch (error) {
@@ -264,15 +258,16 @@
                                     data.push({
                                         day,
                                         date: currentDate.toLocaleDateString('en-GB'),
-                                        recovery: recoveryScore,
-                                        sleepEfficiency: ouraData.sleep?.efficiency || null,
-                                        restingHr: ouraData.heartrate?.bpm || null,
-                                        tempDeviation: ouraData.readiness?.temperature_trend_deviation || null,
+                                        recovery: Math.round(recoveryScore),
+                                        sleepEfficiency: ouraData.sleep?.efficiency ? Math.round(ouraData.sleep.efficiency) : null,
+                                        restingHr: ouraData.heartrate?.bpm ? Math.round(ouraData.heartrate.bpm) : null,
+                                        tempDeviation: ouraData.readiness?.temperature_trend_deviation !== null && ouraData.readiness?.temperature_trend_deviation !== undefined ? 
+                                            Number(ouraData.readiness.temperature_trend_deviation) : null,
                                         isBaseline: false,
                                         dataQuality: ouraData.dataQuality
                                     });
                                     successfulDataPoints++;
-                                    setDebugInfo(prev => prev + `\nDay ${day}: Recovery ${Math.round(recoveryScore)}%`);
+                                    setDebugInfo(prev => prev + `\nDay ${day}: Recovery ${Math.round(recoveryScore)}%, Sleep Eff: ${ouraData.sleep?.efficiency || 'N/A'}%`);
                                 }
                             }
                         } catch (apiError) {
@@ -301,6 +296,14 @@
                     setLoading(false);
                 }
             };
+
+            // Get the latest data point for metrics display
+            const getLatestMetrics = () => {
+                const validData = recoveryData.filter(d => !d.isBaseline);
+                return validData.length > 0 ? validData[validData.length - 1] : null;
+            };
+
+            const latestMetrics = getLatestMetrics();
 
             return (
                 <div className="min-h-screen gradient-bg p-6">
@@ -421,7 +424,7 @@
                                 disabled={!travelData.departure || !travelData.destination || !travelData.timezoneShift || loading}
                                 className="bg-indigo-600 text-white px-6 py-2 rounded-md hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
                             >
-                                {loading ? 'Analyzing...' : 'Start Recovery Analysis'}
+                                {loading ? 'Analysing...' : 'Start Recovery Analysis'}
                             </button>
                         </div>
 
@@ -495,25 +498,20 @@
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm">Resting HR</span>
                                                 <span className="font-medium">
-                                                    {recoveryData[recoveryData.length - 1]?.restingHr ? 
-                                                        `${Math.round(recoveryData[recoveryData.length - 1].restingHr)} bpm` : 
-                                                        'No data'}
+                                                    {latestMetrics?.restingHr ? `${latestMetrics.restingHr} bpm` : 'No data'}
                                                 </span>
                                             </div>
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm">Sleep Efficiency</span>
                                                 <span className="font-medium">
-                                                    {recoveryData[recoveryData.length - 1]?.sleepEfficiency ? 
-                                                        `${Math.round(recoveryData[recoveryData.length - 1].sleepEfficiency)}%` : 
-                                                        'No data'}
+                                                    {latestMetrics?.sleepEfficiency ? `${latestMetrics.sleepEfficiency}%` : 'No data'}
                                                 </span>
                                             </div>
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm">Temp Deviation</span>
                                                 <span className="font-medium">
-                                                    {recoveryData[recoveryData.length - 1]?.tempDeviation !== null && 
-                                                     recoveryData[recoveryData.length - 1]?.tempDeviation !== undefined ? 
-                                                        `${recoveryData[recoveryData.length - 1].tempDeviation >= 0 ? '+' : ''}${recoveryData[recoveryData.length - 1].tempDeviation.toFixed(2)}°C` : 
+                                                    {latestMetrics?.tempDeviation !== null && latestMetrics?.tempDeviation !== undefined ? 
+                                                        `${latestMetrics.tempDeviation >= 0 ? '+' : ''}${latestMetrics.tempDeviation.toFixed(2)}°C` : 
                                                         'No data'}
                                                 </span>
                                             </div>
@@ -523,7 +521,7 @@
                                     <div className="bg-white rounded-xl shadow-lg p-6">
                                         <h3 className="text-lg font-semibold mb-4">Data Quality</h3>
                                         <div className="space-y-2 text-sm">
-                                            <div>Total days analyzed: {recoveryData.filter(d => !d.isBaseline).length}</div>
+                                            <div>Total days analysed: {recoveryData.filter(d => !d.isBaseline).length}</div>
                                             <div>Sleep records: {recoveryData.filter(d => d.dataQuality?.hasSleep).length}</div>
                                             <div>Heart rate data: {recoveryData.filter(d => d.dataQuality?.hasHeartRate).length}</div>
                                             <div>Readiness data: {recoveryData.filter(d => d.dataQuality?.hasReadiness).length}</div>
@@ -531,10 +529,35 @@
                                     </div>
                                 </div>
 
+                                {/* Simple Recovery Chart */}
+                                <div className="bg-white rounded-xl shadow-lg p-6">
+                                    <h3 className="text-lg font-semibold mb-4">Recovery Progress</h3>
+                                    <div className="space-y-2">
+                                        {recoveryData.map((d, i) => (
+                                            <div key={i} className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded">
+                                                <span className="text-sm font-medium">Day {d.day} ({d.date})</span>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-32 bg-gray-200 rounded-full h-2">
+                                                        <div 
+                                                            className={`h-2 rounded-full ${
+                                                                d.recovery >= 90 ? 'bg-green-500' :
+                                                                d.recovery >= 70 ? 'bg-yellow-500' :
+                                                                'bg-red-500'
+                                                            }`}
+                                                            style={{width: `${d.recovery}%`}}
+                                                        ></div>
+                                                    </div>
+                                                    <span className="text-sm font-bold text-indigo-600">{d.recovery}%</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
                                 {/* Recommendations */}
                                 {recommendations.length > 0 && (
                                     <div className="bg-white rounded-xl shadow-lg p-6">
-                                        <h3 className="text-lg font-semibold mb-4">Personalized Recommendations</h3>
+                                        <h3 className="text-lg font-semibold mb-4">Personalised Recommendations</h3>
                                         <div className="space-y-4">
                                             {recommendations.map((rec, index) => (
                                                 <div 
@@ -552,9 +575,9 @@
                                     </div>
                                 )}
 
-                                {/* Raw Data Summary */}
+                                {/* Data Table */}
                                 <div className="bg-white rounded-xl shadow-lg p-6">
-                                    <h3 className="text-lg font-semibold mb-4">Recovery Data Summary</h3>
+                                    <h3 className="text-lg font-semibold mb-4">Detailed Data</h3>
                                     <div className="overflow-x-auto">
                                         <table className="min-w-full text-sm">
                                             <thead>
@@ -576,7 +599,7 @@
                                                         <td className="py-2">{d.recovery ? Math.round(d.recovery) : '-'}</td>
                                                         <td className="py-2">{d.sleepEfficiency ? Math.round(d.sleepEfficiency) : '-'}</td>
                                                         <td className="py-2">{d.restingHr ? Math.round(d.restingHr) : '-'}</td>
-                                                        <td className="py-2">{d.tempDeviation !== null ? Number(d.tempDeviation).toFixed(2) : '-'}</td>
+                                                        <td className="py-2">{d.tempDeviation !== null && d.tempDeviation !== undefined ? Number(d.tempDeviation).toFixed(2) : '-'}</td>
                                                         <td className="py-2">
                                                             {d.isBaseline ? 'Baseline' : 
                                                              d.dataQuality ? [
@@ -630,573 +653,22 @@
             );
         };
 
-        // Hide loading message and render app
-        document.getElementById('loading').style.display = 'none';
-        ReactDOM.render(<JetLagTracker />, document.getElementById('root'));
-    </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jet Lag Recovery Tracker</title>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.8.0/Recharts.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    <style>
-        .gradient-bg {
-            background: linear-gradient(135deg, #eff6ff 0%, #e0e7ff 100%);
+        // Test rendering
+        try {
+            ReactDOM.render(<JetLagTracker />, document.getElementById('root'));
+            console.log('✅ React app rendered successfully');
+        } catch (error) {
+            console.error('❌ React rendering failed:', error);
+            document.getElementById('root').innerHTML = `
+                <div class="min-h-screen flex items-center justify-center bg-red-50">
+                    <div class="text-center p-6">
+                        <h1 class="text-2xl font-bold text-red-800 mb-4">Rendering Error</h1>
+                        <p class="text-red-600">Check browser console for details</p>
+                        <pre class="mt-4 text-left text-sm bg-white p-4 rounded border">${error.toString()}</pre>
+                    </div>
+                </div>
+            `;
         }
-    </style>
-</head>
-<body class="gradient-bg min-h-screen">
-    <div id="root"></div>
-    
-    <script type="text/babel">
-        const { useState } = React;
-        const { Plane, Clock, Heart, Thermometer, Activity, Moon, Sun, Target } = lucide;
-        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadialBarChart, RadialBar } = Recharts;
-
-        const JetLagTracker = () => {
-            const [ouraToken, setOuraToken] = useState('');
-            const [travelData, setTravelData] = useState({
-                departure: '',
-                destination: '',
-                timezoneShift: 0,
-                direction: 'east'
-            });
-            const [recoveryData, setRecoveryData] = useState([]);
-            const [currentRecovery, setCurrentRecovery] = useState(0);
-            const [recommendations, setRecommendations] = useState([]);
-            const [loading, setLoading] = useState(false);
-            const [error, setError] = useState('');
-            const [debugInfo, setDebugInfo] = useState('');
-
-            const baseline = {
-                avgRestingHr: 52,
-                avgSleepEfficiency: 88
-            };
-
-            // Use local API endpoints instead of direct Ōura calls
-            const fetchOuraData = async (date) => {
-                const dateStr = date.toISOString().split('T')[0];
-                
-                try {
-                    const response = await fetch(`/api/oura/combined/${dateStr}`, {
-                        headers: {
-                            'Authorization': `Bearer ${ouraToken}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
-
-                    if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(errorData.error || `HTTP ${response.status}`);
-                    }
-
-                    const data = await response.json();
-                    setDebugInfo(prev => prev + `\n${dateStr}: Sleep=${data.dataQuality.hasSleep}, HR=${data.dataQuality.hasHeartRate}, Readiness=${data.dataQuality.hasReadiness}`);
-                    
-                    return data;
-                } catch (error) {
-                    setDebugInfo(prev => prev + `\n${dateStr}: Error - ${error.message}`);
-                    throw error;
-                }
-            };
-
-            const calculateRecoveryScore = (ouraData, daysSinceTravel) => {
-                if (daysSinceTravel === 0) return 100;
-                if (!ouraData.hasData) return null;
-                
-                let totalWeight = 0;
-                let weightedScore = 0;
-                
-                // Body clock alignment (40% weight)
-                if (ouraData.sleep && ouraData.sleep.bedtime_start && ouraData.sleep.bedtime_end) {
-                    const sleepMidpoint = calculateSleepMidpoint(ouraData.sleep);
-                    const targetMidpoint = adjustedOptimalMidpoint(travelData.timezoneShift);
-                    const alignment = Math.max(0, 100 - Math.abs(getTimeDifference(sleepMidpoint, targetMidpoint)) * 10);
-                    
-                    weightedScore += alignment * 0.4;
-                    totalWeight += 0.4;
-                }
-                
-                // Heart rate recovery (25% weight)
-                if (ouraData.heartrate.bpm && baseline.avgRestingHr) {
-                    const hrDeviation = Math.abs(ouraData.heartrate.bpm - baseline.avgRestingHr);
-                    const hrRecovery = Math.max(0, 100 - (hrDeviation / baseline.avgRestingHr) * 100);
-                    
-                    weightedScore += hrRecovery * 0.25;
-                    totalWeight += 0.25;
-                }
-                
-                // Temperature rhythm (20% weight)
-                if (ouraData.readiness && ouraData.readiness.temperature_trend_deviation !== null) {
-                    const tempAlignment = Math.max(0, 100 - Math.abs(ouraData.readiness.temperature_trend_deviation) * 250);
-                    
-                    weightedScore += tempAlignment * 0.2;
-                    totalWeight += 0.2;
-                }
-                
-                // Sleep efficiency (15% weight)
-                if (ouraData.sleep && ouraData.sleep.efficiency && baseline.avgSleepEfficiency) {
-                    const sleepQuality = Math.min(100, (ouraData.sleep.efficiency / baseline.avgSleepEfficiency) * 100);
-                    
-                    weightedScore += sleepQuality * 0.15;
-                    totalWeight += 0.15;
-                }
-                
-                return totalWeight > 0.3 ? (weightedScore / totalWeight) : null;
-            };
-
-            const calculateSleepMidpoint = (sleepData) => {
-                const start = new Date(sleepData.bedtime_start);
-                const end = new Date(sleepData.bedtime_end);
-                const midpoint = new Date((start.getTime() + end.getTime()) / 2);
-                return midpoint.toTimeString().slice(0, 5);
-            };
-
-            const adjustedOptimalMidpoint = (timezoneShift) => {
-                const baseHour = 3;
-                const adjustedHour = (baseHour + timezoneShift + 24) % 24;
-                return `${adjustedHour.toString().padStart(2, '0')}:00`;
-            };
-
-            const getTimeDifference = (time1, time2) => {
-                const [h1, m1] = time1.split(':').map(Number);
-                const [h2, m2] = time2.split(':').map(Number);
-                const minutes1 = h1 * 60 + m1;
-                const minutes2 = h2 * 60 + m2;
-                const diff = Math.abs(minutes1 - minutes2);
-                return Math.min(diff, 1440 - diff) / 60;
-            };
-
-            const generateRecommendations = (recoveryScore, daysSinceTravel) => {
-                const recs = [];
-                
-                if (recoveryScore >= 95 || daysSinceTravel > 21) {
-                    recs.push({
-                        icon: React.createElement(Target, { className: 'w-4 h-4' }),
-                        text: 'Full recovery achieved! Your circadian rhythm should be completely adapted.',
-                        priority: 'low'
-                    });
-                    return recs;
-                }
-                
-                if (recoveryScore < 70) {
-                    if (travelData.direction === 'east') {
-                        recs.push({
-                            icon: React.createElement(Sun, { className: 'w-4 h-4' }),
-                            text: `Seek bright light exposure in early morning to advance your circadian rhythm`,
-                            priority: 'high'
-                        });
-                    } else {
-                        recs.push({
-                            icon: React.createElement(Moon, { className: 'w-4 h-4' }),
-                            text: `Avoid bright light in the evening after 19:00 to delay your circadian rhythm`,
-                            priority: 'high'
-                        });
-                    }
-                }
-
-                if (recoveryScore < 60) {
-                    recs.push({
-                        icon: React.createElement(Target, { className: 'w-4 h-4' }),
-                        text: `Consider 1-2mg melatonin 30 minutes before target bedtime`,
-                        priority: 'medium'
-                    });
-                }
-
-                if (daysSinceTravel <= 3) {
-                    recs.push({
-                        icon: React.createElement(Activity, { className: 'w-4 h-4' }),
-                        text: 'Keep exercise light and preferably in the morning to support circadian adjustment',
-                        priority: 'medium'
-                    });
-                }
-
-                return recs;
-            };
-
-            const testAPI = async () => {
-                if (!ouraToken.trim()) {
-                    setError('Please enter your Ōura API token first');
-                    return;
-                }
-
-                setLoading(true);
-                setError('');
-                setDebugInfo('Testing local API connection to Ōura...');
-
-                try {
-                    const response = await fetch('/api/oura/test', {
-                        headers: {
-                            'Authorization': `Bearer ${ouraToken}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
-
-                    if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(errorData.error || `HTTP ${response.status}`);
-                    }
-
-                    const result = await response.json();
-                    setDebugInfo(prev => prev + `\nAPI Test Successful! User: ${result.userInfo.email}`);
-                    alert('✅ Local API working! Token validated successfully.');
-                    
-                } catch (error) {
-                    setError(`API Test Failed: ${error.message}`);
-                    setDebugInfo(prev => prev + `\nAPI Test Failed: ${error.message}`);
-                } finally {
-                    setLoading(false);
-                }
-            };
-
-            const startTracking = async () => {
-                if (!ouraToken.trim()) {
-                    setError('Please enter your Ōura API token first');
-                    return;
-                }
-
-                setLoading(true);
-                setError('');
-                setDebugInfo('Starting recovery analysis...');
-                
-                try {
-                    const data = [];
-                    const travelDate = new Date(travelData.departure);
-                    const today = new Date();
-                    const daysSinceTravel = Math.floor((today - travelDate) / (1000 * 60 * 60 * 24));
-                    
-                    setDebugInfo(prev => prev + `\nTravel: ${travelDate.toLocaleDateString()}, Days since: ${daysSinceTravel}`);
-                    
-                    // Baseline
-                    data.push({
-                        day: 0,
-                        date: travelDate.toLocaleDateString('en-GB'),
-                        recovery: 100,
-                        sleepEfficiency: baseline.avgSleepEfficiency,
-                        restingHr: baseline.avgRestingHr,
-                        tempDeviation: 0,
-                        isBaseline: true
-                    });
-                    
-                    const daysToFetch = Math.min(daysSinceTravel, 14);
-                    let successfulDataPoints = 0;
-                    
-                    for (let day = 1; day <= daysToFetch; day++) {
-                        const currentDate = new Date(travelDate);
-                        currentDate.setDate(currentDate.getDate() + day);
-                        
-                        try {
-                            const ouraData = await fetchOuraData(currentDate);
-                            
-                            if (ouraData.hasData) {
-                                const recoveryScore = calculateRecoveryScore(ouraData, day);
-                                
-                                if (recoveryScore !== null) {
-                                    data.push({
-                                        day,
-                                        date: currentDate.toLocaleDateString('en-GB'),
-                                        recovery: recoveryScore,
-                                        sleepEfficiency: ouraData.sleep?.efficiency || null,
-                                        restingHr: ouraData.heartrate?.bpm || null,
-                                        tempDeviation: ouraData.readiness?.temperature_trend_deviation || null,
-                                        isBaseline: false,
-                                        dataQuality: ouraData.dataQuality
-                                    });
-                                    successfulDataPoints++;
-                                    setDebugInfo(prev => prev + `\nDay ${day}: Recovery ${Math.round(recoveryScore)}%`);
-                                }
-                            }
-                        } catch (apiError) {
-                            setDebugInfo(prev => prev + `\nDay ${day}: ${apiError.message}`);
-                        }
-                        
-                        await new Promise(resolve => setTimeout(resolve, 200));
-                    }
-                    
-                    if (successfulDataPoints === 0) {
-                        throw new Error(`No Ōura data found for travel period. Check your ring was syncing during ${travelDate.toLocaleDateString()} onwards.`);
-                    }
-                    
-                    setRecoveryData(data);
-                    const validPoints = data.filter(d => !d.isBaseline && d.recovery !== null);
-                    const latestRecovery = validPoints.length > 0 ? validPoints[validPoints.length - 1].recovery : 0;
-                    setCurrentRecovery(latestRecovery);
-                    setRecommendations(generateRecommendations(latestRecovery, daysSinceTravel));
-                    
-                    setDebugInfo(prev => prev + `\nComplete! ${successfulDataPoints} days of valid data.`);
-                    
-                } catch (error) {
-                    setError(error.message);
-                    setDebugInfo(prev => prev + `\nError: ${error.message}`);
-                } finally {
-                    setLoading(false);
-                }
-            };
-
-            const RecoveryGauge = ({ value }) => {
-                const data = [{ value, fill: value > 80 ? '#22c55e' : value > 60 ? '#f59e0b' : '#ef4444' }];
-                
-                return React.createElement('div', { className: 'relative w-48 h-48 mx-auto' },
-                    React.createElement('div', { className: 'absolute inset-0 flex items-center justify-center' },
-                        React.createElement('div', { className: 'text-center' },
-                            React.createElement('div', { className: 'text-4xl font-bold text-indigo-600' }, `${Math.round(value)}%`),
-                            React.createElement('div', { className: 'text-sm text-gray-600' }, 'Recovery')
-                        )
-                    )
-                );
-            };
-
-            return React.createElement('div', { className: 'min-h-screen gradient-bg p-6' },
-                React.createElement('div', { className: 'max-w-6xl mx-auto' },
-                    // Header
-                    React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6 mb-6' },
-                        React.createElement('div', { className: 'flex items-center gap-3 mb-4' },
-                            React.createElement(Plane, { className: 'w-8 h-8 text-indigo-600' }),
-                            React.createElement('h1', { className: 'text-3xl font-bold text-gray-900' }, 'Jet Lag Recovery Tracker')
-                        ),
-                        React.createElement('p', { className: 'text-gray-600' }, 'Local Node.js application with real Ōura API integration - No CORS issues!')
-                    ),
-
-                    // Token Input
-                    React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6 mb-6' },
-                        React.createElement('h2', { className: 'text-xl font-semibold mb-4 flex items-center gap-2' },
-                            React.createElement(Heart, { className: 'w-5 h-5 text-red-500' }),
-                            'Ōura API Token'
-                        ),
-                        React.createElement('input', {
-                            type: 'password',
-                            value: ouraToken,
-                            onChange: (e) => setOuraToken(e.target.value),
-                            placeholder: 'Enter your Ōura API token',
-                            className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4'
-                        }),
-                        React.createElement('p', { className: 'text-xs text-gray-500 mb-4' },
-                            'Get your token from ',
-                            React.createElement('a', { 
-                                href: 'https://cloud.ouraring.com/personal-access-tokens',
-                                className: 'text-indigo-600 hover:underline',
-                                target: '_blank',
-                                rel: 'noopener noreferrer'
-                            }, 'Ōura Cloud')
-                        ),
-                        ouraToken && React.createElement('button', {
-                            onClick: testAPI,
-                            disabled: loading,
-                            className: 'bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed'
-                        }, loading ? 'Testing...' : 'Test API Connection')
-                    ),
-
-                    // Debug Panel
-                    debugInfo && React.createElement('div', { className: 'bg-gray-50 rounded-xl border p-4 mb-6' },
-                        React.createElement('h3', { className: 'text-sm font-medium text-gray-700 mb-2' }, 'Debug Information'),
-                        React.createElement('pre', { 
-                            className: 'text-xs text-gray-600 whitespace-pre-wrap font-mono bg-white p-2 rounded border max-h-32 overflow-y-auto' 
-                        }, debugInfo),
-                        React.createElement('button', {
-                            onClick: () => setDebugInfo(''),
-                            className: 'mt-2 text-xs text-gray-500 hover:text-gray-700'
-                        }, 'Clear Debug Info')
-                    ),
-
-                    // Travel Form
-                    React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6 mb-6' },
-                        React.createElement('h2', { className: 'text-xl font-semibold mb-4 flex items-center gap-2' },
-                            React.createElement(Clock, { className: 'w-5 h-5 text-blue-500' }),
-                            'Travel Details'
-                        ),
-                        React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-4 gap-4 mb-4' },
-                            React.createElement('div', null,
-                                React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-2' }, 'Departure'),
-                                React.createElement('input', {
-                                    type: 'datetime-local',
-                                    value: travelData.departure,
-                                    onChange: (e) => setTravelData({...travelData, departure: e.target.value}),
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500'
-                                })
-                            ),
-                            React.createElement('div', null,
-                                React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-2' }, 'Destination'),
-                                React.createElement('input', {
-                                    type: 'text',
-                                    value: travelData.destination,
-                                    onChange: (e) => setTravelData({...travelData, destination: e.target.value}),
-                                    placeholder: 'e.g., London, UK',
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500'
-                                })
-                            ),
-                            React.createElement('div', null,
-                                React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-2' }, 'Timezone Shift (hours)'),
-                                React.createElement('input', {
-                                    type: 'number',
-                                    value: travelData.timezoneShift,
-                                    onChange: (e) => setTravelData({...travelData, timezoneShift: parseInt(e.target.value) || 0}),
-                                    placeholder: 'e.g., +8 for London from SF',
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500'
-                                })
-                            ),
-                            React.createElement('div', null,
-                                React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-2' }, 'Direction'),
-                                React.createElement('select', {
-                                    value: travelData.direction,
-                                    onChange: (e) => setTravelData({...travelData, direction: e.target.value}),
-                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500'
-                                },
-                                    React.createElement('option', { value: 'east' }, 'Eastward'),
-                                    React.createElement('option', { value: 'west' }, 'Westward')
-                                )
-                            )
-                        ),
-                        React.createElement('button', {
-                            onClick: startTracking,
-                            disabled: !travelData.departure || !travelData.destination || !travelData.timezoneShift || loading,
-                            className: 'bg-indigo-600 text-white px-6 py-2 rounded-md hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed'
-                        }, loading ? 'Analyzing...' : 'Start Recovery Analysis')
-                    ),
-
-                    // Loading State
-                    loading && React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6 mb-6 text-center' },
-                        React.createElement('div', { className: 'animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-2' }),
-                        React.createElement('p', null, 'Fetching your Ōura data via local server...'),
-                        React.createElement('p', { className: 'text-sm text-gray-500 mt-1' }, 'This may take a moment as we process multiple days of data')
-                    ),
-
-                    // Error State
-                    error && React.createElement('div', { className: 'bg-red-50 border border-red-200 rounded-xl p-6 mb-6' },
-                        React.createElement('div', { className: 'flex items-center gap-2 text-red-800 mb-2' },
-                            React.createElement('h3', { className: 'font-medium' }, 'Error')
-                        ),
-                        React.createElement('p', { className: 'text-red-700 text-sm whitespace-pre-line' }, error)
-                    ),
-
-                    // Results
-                    recoveryData.length > 0 && React.createElement('div', { className: 'space-y-6' },
-                        // Recovery Status
-                        React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-3 gap-6' },
-                            React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6 text-center' },
-                                React.createElement('h3', { className: 'text-lg font-semibold mb-4' }, 'Current Recovery'),
-                                React.createElement(RecoveryGauge, { value: currentRecovery }),
-                                React.createElement('div', { className: 'mt-4' },
-                                    React.createElement('p', { className: 'text-sm text-gray-600' },
-                                        `${recoveryData.filter(d => !d.isBaseline).length} days of real data`
-                                    ),
-                                    currentRecovery >= 95 && React.createElement('div', { className: 'mt-2' },
-                                        React.createElement('span', { 
-                                            className: 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800' 
-                                        }, '✓ Fully Recovered')
-                                    )
-                                )
-                            ),
-
-                            React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6' },
-                                React.createElement('h3', { className: 'text-lg font-semibold mb-4' }, 'Latest Metrics'),
-                                React.createElement('div', { className: 'space-y-3' },
-                                    React.createElement('div', { className: 'flex justify-between items-center' },
-                                        React.createElement('span', { className: 'flex items-center gap-2 text-sm' },
-                                            React.createElement(Heart, { className: 'w-4 h-4 text-red-500' }),
-                                            'Resting HR'
-                                        ),
-                                        React.createElement('span', { className: 'font-medium' },
-                                            recoveryData[recoveryData.length - 1]?.restingHr ? 
-                                                `${Math.round(recoveryData[recoveryData.length - 1].restingHr)} bpm` : 
-                                                'No data'
-                                        )
-                                    ),
-                                    React.createElement('div', { className: 'flex justify-between items-center' },
-                                        React.createElement('span', { className: 'flex items-center gap-2 text-sm' },
-                                            React.createElement(Moon, { className: 'w-4 h-4 text-purple-500' }),
-                                            'Sleep Efficiency'
-                                        ),
-                                        React.createElement('span', { className: 'font-medium' },
-                                            recoveryData[recoveryData.length - 1]?.sleepEfficiency ? 
-                                                `${Math.round(recoveryData[recoveryData.length - 1].sleepEfficiency)}%` : 
-                                                'No data'
-                                        )
-                                    ),
-                                    React.createElement('div', { className: 'flex justify-between items-center' },
-                                        React.createElement('span', { className: 'flex items-center gap-2 text-sm' },
-                                            React.createElement(Thermometer, { className: 'w-4 h-4 text-orange-500' }),
-                                            'Temp Deviation'
-                                        ),
-                                        React.createElement('span', { className: 'font-medium' },
-                                            recoveryData[recoveryData.length - 1]?.tempDeviation !== null && 
-                                            recoveryData[recoveryData.length - 1]?.tempDeviation !== undefined ? 
-                                                `${recoveryData[recoveryData.length - 1].tempDeviation >= 0 ? '+' : ''}${recoveryData[recoveryData.length - 1].tempDeviation.toFixed(2)}°C` : 
-                                                'No data'
-                                        )
-                                    )
-                                )
-                            ),
-
-                            React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6' },
-                                React.createElement('h3', { className: 'text-lg font-semibold mb-4' }, 'Data Quality'),
-                                React.createElement('div', { className: 'space-y-2 text-sm' },
-                                    React.createElement('div', null, `Total days analyzed: ${recoveryData.filter(d => !d.isBaseline).length}`),
-                                    React.createElement('div', null, `Sleep records: ${recoveryData.filter(d => d.dataQuality?.hasSleep).length}`),
-                                    React.createElement('div', null, `Heart rate data: ${recoveryData.filter(d => d.dataQuality?.hasHeartRate).length}`),
-                                    React.createElement('div', null, `Readiness data: ${recoveryData.filter(d => d.dataQuality?.hasReadiness).length}`)
-                                )
-                            )
-                        ),
-
-                        // Recommendations
-                        recommendations.length > 0 && React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6' },
-                            React.createElement('h3', { className: 'text-lg font-semibold mb-4' }, 'Personalized Recommendations'),
-                            React.createElement('div', { className: 'space-y-4' },
-                                recommendations.map((rec, index) =>
-                                    React.createElement('div', { 
-                                        key: index,
-                                        className: `p-4 rounded-lg border-l-4 ${
-                                            rec.priority === 'high' ? 'border-red-500 bg-red-50' :
-                                            rec.priority === 'medium' ? 'border-yellow-500 bg-yellow-50' :
-                                            'border-green-500 bg-green-50'
-                                        }`
-                                    },
-                                        React.createElement('div', { className: 'flex items-start gap-3' },
-                                            React.createElement('div', { 
-                                                className: `mt-0.5 ${
-                                                    rec.priority === 'high' ? 'text-red-600' :
-                                                    rec.priority === 'medium' ? 'text-yellow-600' :
-                                                    'text-green-600'
-                                                }`
-                                            }, rec.icon),
-                                            React.createElement('p', { className: 'text-sm' }, rec.text)
-                                        )
-                                    )
-                                )
-                            )
-                        ),
-
-                        // Raw Data Summary
-                        React.createElement('div', { className: 'bg-white rounded-xl shadow-lg p-6' },
-                            React.createElement('h3', { className: 'text-lg font-semibold mb-4' }, 'Raw Data Summary'),
-                            React.createElement('div', { className: 'overflow-x-auto' },
-                                React.createElement('pre', { className: 'text-xs bg-gray-50 p-3 rounded text-left' },
-                                    JSON.stringify(recoveryData.map(d => ({
-                                        day: d.day,
-                                        date: d.date,
-                                        recovery: d.recovery ? Math.round(d.recovery) : null,
-                                        sleepEfficiency: d.sleepEfficiency ? Math.round(d.sleepEfficiency) : null,
-                                        restingHR: d.restingHr ? Math.round(d.restingHr) : null,
-                                        tempDev: d.tempDeviation !== null ? Number(d.tempDeviation).toFixed(2) : null,
-                                        hasData: d.dataQuality ? Object.values(d.dataQuality).some(Boolean) : d.isBaseline
-                                    })), null, 2)
-                                )
-                            )
-                        )
-                    )
-                )
-            );
-        };
-
-        ReactDOM.render(React.createElement(JetLagTracker), document.getElementById('root'));
     </script>
 </body>
 </html>
