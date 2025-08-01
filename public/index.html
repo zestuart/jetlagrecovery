@@ -15,6 +15,12 @@
     </style>
 </head>
 <body class="gradient-bg min-h-screen">
+    <div id="loading" class="flex items-center justify-center min-h-screen">
+        <div class="text-center">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+            <p class="text-gray-600">Loading Jet Lag Tracker...</p>
+        </div>
+    </div>
     <div id="root"></div>
     
     <script type="text/babel">
@@ -40,14 +46,25 @@
                 avgSleepEfficiency: 88
             };
 
-            // Use local API endpoints
+            // Use local API endpoints with enhanced error handling
             const fetchOuraData = async (date) => {
-                const dateStr = date.toISOString().split('T')[0];
+                // Ensure date is properly formatted
+                const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD format
+                
+                // Add date validation
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                    throw new Error(`Invalid date format: ${dateStr}. Expected YYYY-MM-DD`);
+                }
+                
+                console.log(`Fetching data for date: ${dateStr} (ISO: ${date.toISOString()})`);
                 
                 try {
+                    // Ensure token doesn't already have "Bearer " prefix
+                    const authToken = ouraToken.startsWith('Bearer ') ? ouraToken : `Bearer ${ouraToken}`;
+                    
                     const response = await fetch(`/api/oura/combined/${dateStr}`, {
                         headers: {
-                            'Authorization': `Bearer ${ouraToken}`,
+                            'Authorization': authToken,
                             'Content-Type': 'application/json'
                         }
                     });
@@ -58,7 +75,23 @@
                     }
 
                     const data = await response.json();
-                    setDebugInfo(prev => prev + `\n${dateStr}: Sleep=${data.dataQuality.hasSleep}, HR=${data.dataQuality.hasHeartRate}, Readiness=${data.dataQuality.hasReadiness}`);
+                    
+                    // Log detailed data quality
+                    console.log(`Data quality for ${dateStr}:`, {
+                        hasSleep: data.dataQuality.hasSleep,
+                        sleepEfficiency: data.sleep?.efficiency || 'No sleep data',
+                        sleepDay: data.sleep?.day || 'N/A',
+                        bedtimeStart: data.sleep?.bedtime_start || 'N/A',
+                        hrBPM: data.heartrate?.bpm?.toFixed(1) || 'No HR data',
+                        tempDev: data.readiness?.temperature_trend_deviation || 'No readiness data'
+                    });
+                    
+                    setDebugInfo(prev => 
+                        prev + `\n${dateStr}: Sleep=${data.dataQuality.hasSleep}, ` +
+                        `Efficiency=${data.sleep?.efficiency || 'N/A'}, ` +
+                        `HR=${data.dataQuality.hasHeartRate}, ` +
+                        `Readiness=${data.dataQuality.hasReadiness}`
+                    );
                     
                     return data;
                 } catch (error) {
@@ -74,7 +107,7 @@
                 let totalWeight = 0;
                 let weightedScore = 0;
                 
-                // Body clock alignment (40% weight)
+                // Body clock alignment (40% weight) - only if sleep data exists
                 if (ouraData.sleep && ouraData.sleep.bedtime_start && ouraData.sleep.bedtime_end) {
                     const sleepMidpoint = calculateSleepMidpoint(ouraData.sleep);
                     const targetMidpoint = adjustedOptimalMidpoint(travelData.timezoneShift);
@@ -82,6 +115,8 @@
                     
                     weightedScore += alignment * 0.4;
                     totalWeight += 0.4;
+                } else {
+                    console.warn(`No sleep data for recovery calculation - day ${daysSinceTravel}`);
                 }
                 
                 // Heart rate recovery (25% weight)
@@ -101,7 +136,7 @@
                     totalWeight += 0.2;
                 }
                 
-                // Sleep efficiency (15% weight)
+                // Sleep efficiency (15% weight) - only if sleep data exists
                 if (ouraData.sleep && ouraData.sleep.efficiency && baseline.avgSleepEfficiency) {
                     const sleepQuality = Math.min(100, (ouraData.sleep.efficiency / baseline.avgSleepEfficiency) * 100);
                     
@@ -109,6 +144,12 @@
                     totalWeight += 0.15;
                 }
                 
+                // Adjust weights if sleep data is missing
+                if (!ouraData.sleep) {
+                    console.log(`Calculating recovery without sleep data for day ${daysSinceTravel} - using ${totalWeight} total weight`);
+                }
+                
+                // Return null if we have less than 30% of the data needed
                 return totalWeight > 0.3 ? (weightedScore / totalWeight) : null;
             };
 
@@ -176,6 +217,46 @@
                 return recs;
             };
 
+            const checkDataAvailability = async () => {
+                if (!ouraToken || !travelData.departure) {
+                    alert('Please enter token and travel date first');
+                    return;
+                }
+                
+                const startDate = new Date(travelData.departure);
+                const endDate = new Date(startDate);
+                endDate.setDate(endDate.getDate() + 7);
+                
+                setLoading(true);
+                try {
+                    // Ensure token doesn't already have "Bearer " prefix
+                    const authToken = ouraToken.startsWith('Bearer ') ? ouraToken : `Bearer ${ouraToken}`;
+                    
+                    const response = await fetch(
+                        `/api/oura/sleep-range/${startDate.toISOString().split('T')[0]}/${endDate.toISOString().split('T')[0]}`,
+                        {
+                            headers: {
+                                'Authorization': authToken,
+                                'Content-Type': 'application/json'
+                            }
+                        }
+                    );
+                    
+                    const data = await response.json();
+                    
+                    if (data.error) {
+                        setError(`API Error: ${data.error}`);
+                    } else if (data.data) {
+                        const sleepDates = data.data.map(s => s.day).join(', ');
+                        alert(`Found ${data.data.length} sleep records:\n${sleepDates || 'None'}\n\nIf dates are missing, ensure your ring was worn and synced.`);
+                    }
+                } catch (error) {
+                    setError(`Check failed: ${error.message}`);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
             const testAPI = async () => {
                 if (!ouraToken.trim()) {
                     setError('Please enter your Ōura API token first');
@@ -187,9 +268,12 @@
                 setDebugInfo('Testing local API connection to Ōura...');
 
                 try {
+                    // Ensure token doesn't already have "Bearer " prefix
+                    const authToken = ouraToken.startsWith('Bearer ') ? ouraToken : `Bearer ${ouraToken}`;
+                    
                     const response = await fetch('/api/oura/test', {
                         headers: {
-                            'Authorization': `Bearer ${ouraToken}`,
+                            'Authorization': authToken,
                             'Content-Type': 'application/json'
                         }
                     });
@@ -201,8 +285,8 @@
 
                     const result = await response.json();
                     setDebugInfo(prev => prev + `\nAPI Test Successful! User: ${result.userInfo.email}`);
-                    setError('');
-                    alert('✅ Local API working! Token validated successfully.');
+                    setError(''); // Clear any previous errors
+                    alert(`✅ Local API working! Token validated successfully.\n\nSleep records found: ${result.sleepRecordCount || 0}\nRecent dates: ${result.recentSleepDates?.join(', ') || 'None'}`);
                     
                 } catch (error) {
                     setError(`API Test Failed: ${error.message}`);
@@ -223,17 +307,59 @@
                 setDebugInfo('Starting recovery analysis...');
                 
                 try {
+                    // First, check what sleep data is available
+                    setDebugInfo(prev => prev + '\nChecking available sleep data range...');
+                    
+                    const today = new Date();
+                    const thirtyDaysAgo = new Date(today);
+                    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                    
+                    const authToken = ouraToken.startsWith('Bearer ') ? ouraToken : `Bearer ${ouraToken}`;
+                    
+                    // Check what sleep data is available
+                    const sleepRangeResponse = await fetch(
+                        `/api/oura/sleep-range/${thirtyDaysAgo.toISOString().split('T')[0]}/${today.toISOString().split('T')[0]}`,
+                        {
+                            headers: {
+                                'Authorization': authToken,
+                                'Content-Type': 'application/json'
+                            }
+                        }
+                    );
+                    
+                    const sleepRangeData = await sleepRangeResponse.json();
+                    const availableSleepDates = sleepRangeData.data?.map(s => s.day) || [];
+                    
+                    if (availableSleepDates.length === 0) {
+                        throw new Error('No sleep data found in your Oura account. Please sync your ring and try again.');
+                    }
+                    
+                    const earliestSleepDate = new Date(availableSleepDates[0]);
+                    const latestSleepDate = new Date(availableSleepDates[availableSleepDates.length - 1]);
+                    
+                    setDebugInfo(prev => prev + `\nSleep data available from ${earliestSleepDate.toLocaleDateString()} to ${latestSleepDate.toLocaleDateString()}`);
+                    
                     const data = [];
                     const travelDate = new Date(travelData.departure);
-                    const today = new Date();
-                    const daysSinceTravel = Math.floor((today - travelDate) / (1000 * 60 * 60 * 24));
                     
-                    setDebugInfo(prev => prev + `\nTravel: ${travelDate.toLocaleDateString()}, Days since: ${daysSinceTravel}`);
+                    // Validate travel date against available data
+                    if (travelDate < earliestSleepDate) {
+                        setDebugInfo(prev => prev + `\n⚠️ Travel date (${travelDate.toLocaleDateString()}) is before earliest sleep data (${earliestSleepDate.toLocaleDateString()})`);
+                        setDebugInfo(prev => prev + `\nAdjusting analysis to start from ${earliestSleepDate.toLocaleDateString()}`);
+                    }
                     
-                    // Baseline
+                    const analysisStartDate = travelDate < earliestSleepDate ? earliestSleepDate : travelDate;
+                    const daysSinceTravel = Math.floor((today - analysisStartDate) / (1000 * 60 * 60 * 24));
+                    
+                    setDebugInfo(prev => prev + `\nAnalyzing ${daysSinceTravel} days since ${analysisStartDate.toLocaleDateString()}`);
+                    
+                    // Baseline (using the day before travel or first available data)
+                    const baselineDate = new Date(analysisStartDate);
+                    baselineDate.setDate(baselineDate.getDate() - 1);
+                    
                     data.push({
                         day: 0,
-                        date: travelDate.toLocaleDateString('en-GB'),
+                        date: analysisStartDate.toLocaleDateString('en-GB'),
                         recovery: 100,
                         sleepEfficiency: baseline.avgSleepEfficiency,
                         restingHr: baseline.avgRestingHr,
@@ -243,10 +369,20 @@
                     
                     const daysToFetch = Math.min(daysSinceTravel, 14);
                     let successfulDataPoints = 0;
+                    let missingSleepDays = [];
+                    let skippedDays = [];
                     
                     for (let day = 1; day <= daysToFetch; day++) {
-                        const currentDate = new Date(travelDate);
+                        const currentDate = new Date(analysisStartDate);
                         currentDate.setDate(currentDate.getDate() + day);
+                        const currentDateStr = currentDate.toISOString().split('T')[0];
+                        
+                        // Check if this date has sleep data
+                        if (!availableSleepDates.includes(currentDateStr)) {
+                            skippedDays.push(currentDateStr);
+                            setDebugInfo(prev => prev + `\nDay ${day} (${currentDateStr}): No sleep data available - skipping`);
+                            continue;
+                        }
                         
                         try {
                             const ouraData = await fetchOuraData(currentDate);
@@ -258,16 +394,21 @@
                                     data.push({
                                         day,
                                         date: currentDate.toLocaleDateString('en-GB'),
-                                        recovery: Math.round(recoveryScore),
-                                        sleepEfficiency: ouraData.sleep?.efficiency ? Math.round(ouraData.sleep.efficiency) : null,
-                                        restingHr: ouraData.heartrate?.bpm ? Math.round(ouraData.heartrate.bpm) : null,
-                                        tempDeviation: ouraData.readiness?.temperature_trend_deviation !== null && ouraData.readiness?.temperature_trend_deviation !== undefined ? 
-                                            Number(ouraData.readiness.temperature_trend_deviation) : null,
+                                        recovery: recoveryScore,
+                                        sleepEfficiency: ouraData.sleep?.efficiency || null,
+                                        restingHr: ouraData.heartrate?.bpm || null,
+                                        tempDeviation: ouraData.readiness?.temperature_trend_deviation || null,
                                         isBaseline: false,
                                         dataQuality: ouraData.dataQuality
                                     });
                                     successfulDataPoints++;
-                                    setDebugInfo(prev => prev + `\nDay ${day}: Recovery ${Math.round(recoveryScore)}%, Sleep Eff: ${ouraData.sleep?.efficiency || 'N/A'}%`);
+                                    setDebugInfo(prev => prev + `\nDay ${day}: Recovery ${Math.round(recoveryScore)}%` + 
+                                                               (ouraData.sleep ? ` (Sleep Eff: ${ouraData.sleep.efficiency}%)` : ' (No sleep data)'));
+                                    
+                                    // Track missing sleep data even for available dates
+                                    if (!ouraData.dataQuality.hasSleep) {
+                                        missingSleepDays.push(currentDate.toLocaleDateString('en-GB'));
+                                    }
                                 }
                             }
                         } catch (apiError) {
@@ -278,7 +419,16 @@
                     }
                     
                     if (successfulDataPoints === 0) {
-                        throw new Error(`No Ōura data found for travel period. Check your ring was syncing during ${travelDate.toLocaleDateString()} onwards.`);
+                        throw new Error(`No Ōura data could be processed. Check the debug information above.`);
+                    }
+                    
+                    // Report on data quality
+                    if (skippedDays.length > 0) {
+                        setDebugInfo(prev => prev + `\n\n📊 Skipped ${skippedDays.length} days with no Oura data`);
+                    }
+                    
+                    if (missingSleepDays.length > 0) {
+                        setDebugInfo(prev => prev + `\n⚠️ Days with missing sleep component: ${missingSleepDays.join(', ')}`);
                     }
                     
                     setRecoveryData(data);
@@ -287,7 +437,12 @@
                     setCurrentRecovery(latestRecovery);
                     setRecommendations(generateRecommendations(latestRecovery, daysSinceTravel));
                     
-                    setDebugInfo(prev => prev + `\nComplete! ${successfulDataPoints} days of valid data.`);
+                    setDebugInfo(prev => prev + `\n✅ Complete! ${successfulDataPoints} days analyzed successfully.`);
+                    
+                    // Add warning if travel date was before available data
+                    if (travelDate < earliestSleepDate) {
+                        setError(`Note: Your travel date (${travelDate.toLocaleDateString()}) was before your earliest Oura data (${earliestSleepDate.toLocaleDateString()}). Analysis started from first available data.`);
+                    }
                     
                 } catch (error) {
                     setError(error.message);
@@ -296,14 +451,6 @@
                     setLoading(false);
                 }
             };
-
-            // Get the latest data point for metrics display
-            const getLatestMetrics = () => {
-                const validData = recoveryData.filter(d => !d.isBaseline);
-                return validData.length > 0 ? validData[validData.length - 1] : null;
-            };
-
-            const latestMetrics = getLatestMetrics();
 
             return (
                 <div className="min-h-screen gradient-bg p-6">
@@ -343,13 +490,71 @@
                                 >Ōura Cloud</a>
                             </p>
                             {ouraToken && (
-                                <button
-                                    onClick={testAPI}
-                                    disabled={loading}
-                                    className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                                >
-                                    {loading ? 'Testing...' : 'Test API Connection'}
-                                </button>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={testAPI}
+                                        disabled={loading}
+                                        className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                    >
+                                        {loading ? 'Testing...' : 'Test API Connection'}
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            setLoading(true);
+                                            try {
+                                                // Ensure token doesn't already have "Bearer " prefix
+                                                const authToken = ouraToken.startsWith('Bearer ') ? ouraToken : `Bearer ${ouraToken}`;
+                                                
+                                                // Test 1: Direct curl equivalent
+                                                console.log('\n=== Running Sleep Direct Test (curl equivalent) ===');
+                                                const directResponse = await fetch('/api/oura/sleep-direct-test', {
+                                                    headers: {
+                                                        'Authorization': authToken,
+                                                        'Accept': 'application/json'
+                                                    }
+                                                });
+                                                const directData = await directResponse.json();
+                                                console.log('Direct test results:', directData);
+                                                
+                                                // Test 2: Different endpoints
+                                                console.log('\n=== Testing Different Sleep Endpoints ===');
+                                                const endpointsResponse = await fetch('/api/oura/sleep-endpoints-test', {
+                                                    headers: {
+                                                        'Authorization': authToken,
+                                                        'Accept': 'application/json'
+                                                    }
+                                                });
+                                                const endpointsData = await endpointsResponse.json();
+                                                console.log('Endpoints test results:', endpointsData);
+                                                
+                                                // Show results
+                                                alert(`Sleep API Diagnostic Results:\n\n` +
+                                                      `Direct Test (curl equivalent):\n` +
+                                                      `- Records found: ${directData.recordCount || 0}\n` +
+                                                      `- Dates: ${directData.dates?.slice(0, 5).join(', ') || 'None'}\n\n` +
+                                                      `Endpoint Tests:\n` +
+                                                      Object.entries(endpointsData).map(([name, result]) => 
+                                                          `- ${name}: ${result.success ? `✓ ${result.recordCount} records` : `✗ ${result.error}`}`
+                                                      ).join('\n') +
+                                                      `\n\nCheck browser console for detailed logs.`);
+                                                      
+                                                // If we found sleep data, log a sample
+                                                if (directData.sampleRecord) {
+                                                    console.log('Sample sleep record:', directData.sampleRecord);
+                                                }
+                                            } catch (error) {
+                                                setError(`Diagnostic failed: ${error.message}`);
+                                                console.error('Diagnostic error:', error);
+                                            } finally {
+                                                setLoading(false);
+                                            }
+                                        }}
+                                        disabled={loading}
+                                        className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                    >
+                                        Run Sleep Diagnostics
+                                    </button>
+                                </div>
                             )}
                         </div>
 
@@ -419,13 +624,24 @@
                                     </select>
                                 </div>
                             </div>
-                            <button
-                                onClick={startTracking}
-                                disabled={!travelData.departure || !travelData.destination || !travelData.timezoneShift || loading}
-                                className="bg-indigo-600 text-white px-6 py-2 rounded-md hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                            >
-                                {loading ? 'Analysing...' : 'Start Recovery Analysis'}
-                            </button>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={startTracking}
+                                    disabled={!travelData.departure || !travelData.destination || !travelData.timezoneShift || loading}
+                                    className="bg-indigo-600 text-white px-6 py-2 rounded-md hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    {loading ? 'Analyzing...' : 'Start Recovery Analysis'}
+                                </button>
+                                {ouraToken && travelData.departure && (
+                                    <button
+                                        onClick={checkDataAvailability}
+                                        disabled={loading}
+                                        className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                    >
+                                        Check Data Availability
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
                         {/* Loading State */}
@@ -498,20 +714,25 @@
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm">Resting HR</span>
                                                 <span className="font-medium">
-                                                    {latestMetrics?.restingHr ? `${latestMetrics.restingHr} bpm` : 'No data'}
+                                                    {recoveryData[recoveryData.length - 1]?.restingHr ? 
+                                                        `${Math.round(recoveryData[recoveryData.length - 1].restingHr)} bpm` : 
+                                                        'No data'}
                                                 </span>
                                             </div>
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm">Sleep Efficiency</span>
                                                 <span className="font-medium">
-                                                    {latestMetrics?.sleepEfficiency ? `${latestMetrics.sleepEfficiency}%` : 'No data'}
+                                                    {recoveryData[recoveryData.length - 1]?.sleepEfficiency ? 
+                                                        `${Math.round(recoveryData[recoveryData.length - 1].sleepEfficiency)}%` : 
+                                                        'No data'}
                                                 </span>
                                             </div>
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm">Temp Deviation</span>
                                                 <span className="font-medium">
-                                                    {latestMetrics?.tempDeviation !== null && latestMetrics?.tempDeviation !== undefined ? 
-                                                        `${latestMetrics.tempDeviation >= 0 ? '+' : ''}${latestMetrics.tempDeviation.toFixed(2)}°C` : 
+                                                    {recoveryData[recoveryData.length - 1]?.tempDeviation !== null && 
+                                                     recoveryData[recoveryData.length - 1]?.tempDeviation !== undefined ? 
+                                                        `${recoveryData[recoveryData.length - 1].tempDeviation >= 0 ? '+' : ''}${recoveryData[recoveryData.length - 1].tempDeviation.toFixed(2)}°C` : 
                                                         'No data'}
                                                 </span>
                                             </div>
@@ -521,7 +742,7 @@
                                     <div className="bg-white rounded-xl shadow-lg p-6">
                                         <h3 className="text-lg font-semibold mb-4">Data Quality</h3>
                                         <div className="space-y-2 text-sm">
-                                            <div>Total days analysed: {recoveryData.filter(d => !d.isBaseline).length}</div>
+                                            <div>Total days analyzed: {recoveryData.filter(d => !d.isBaseline).length}</div>
                                             <div>Sleep records: {recoveryData.filter(d => d.dataQuality?.hasSleep).length}</div>
                                             <div>Heart rate data: {recoveryData.filter(d => d.dataQuality?.hasHeartRate).length}</div>
                                             <div>Readiness data: {recoveryData.filter(d => d.dataQuality?.hasReadiness).length}</div>
@@ -529,35 +750,10 @@
                                     </div>
                                 </div>
 
-                                {/* Simple Recovery Chart */}
-                                <div className="bg-white rounded-xl shadow-lg p-6">
-                                    <h3 className="text-lg font-semibold mb-4">Recovery Progress</h3>
-                                    <div className="space-y-2">
-                                        {recoveryData.map((d, i) => (
-                                            <div key={i} className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded">
-                                                <span className="text-sm font-medium">Day {d.day} ({d.date})</span>
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-32 bg-gray-200 rounded-full h-2">
-                                                        <div 
-                                                            className={`h-2 rounded-full ${
-                                                                d.recovery >= 90 ? 'bg-green-500' :
-                                                                d.recovery >= 70 ? 'bg-yellow-500' :
-                                                                'bg-red-500'
-                                                            }`}
-                                                            style={{width: `${d.recovery}%`}}
-                                                        ></div>
-                                                    </div>
-                                                    <span className="text-sm font-bold text-indigo-600">{d.recovery}%</span>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-
                                 {/* Recommendations */}
                                 {recommendations.length > 0 && (
                                     <div className="bg-white rounded-xl shadow-lg p-6">
-                                        <h3 className="text-lg font-semibold mb-4">Personalised Recommendations</h3>
+                                        <h3 className="text-lg font-semibold mb-4">Personalized Recommendations</h3>
                                         <div className="space-y-4">
                                             {recommendations.map((rec, index) => (
                                                 <div 
@@ -575,9 +771,9 @@
                                     </div>
                                 )}
 
-                                {/* Data Table */}
+                                {/* Raw Data Summary */}
                                 <div className="bg-white rounded-xl shadow-lg p-6">
-                                    <h3 className="text-lg font-semibold mb-4">Detailed Data</h3>
+                                    <h3 className="text-lg font-semibold mb-4">Recovery Data Summary</h3>
                                     <div className="overflow-x-auto">
                                         <table className="min-w-full text-sm">
                                             <thead>
@@ -599,7 +795,7 @@
                                                         <td className="py-2">{d.recovery ? Math.round(d.recovery) : '-'}</td>
                                                         <td className="py-2">{d.sleepEfficiency ? Math.round(d.sleepEfficiency) : '-'}</td>
                                                         <td className="py-2">{d.restingHr ? Math.round(d.restingHr) : '-'}</td>
-                                                        <td className="py-2">{d.tempDeviation !== null && d.tempDeviation !== undefined ? Number(d.tempDeviation).toFixed(2) : '-'}</td>
+                                                        <td className="py-2">{d.tempDeviation !== null ? Number(d.tempDeviation).toFixed(2) : '-'}</td>
                                                         <td className="py-2">
                                                             {d.isBaseline ? 'Baseline' : 
                                                              d.dataQuality ? [
@@ -653,22 +849,9 @@
             );
         };
 
-        // Test rendering
-        try {
-            ReactDOM.render(<JetLagTracker />, document.getElementById('root'));
-            console.log('✅ React app rendered successfully');
-        } catch (error) {
-            console.error('❌ React rendering failed:', error);
-            document.getElementById('root').innerHTML = `
-                <div class="min-h-screen flex items-center justify-center bg-red-50">
-                    <div class="text-center p-6">
-                        <h1 class="text-2xl font-bold text-red-800 mb-4">Rendering Error</h1>
-                        <p class="text-red-600">Check browser console for details</p>
-                        <pre class="mt-4 text-left text-sm bg-white p-4 rounded border">${error.toString()}</pre>
-                    </div>
-                </div>
-            `;
-        }
+        // Hide loading message and render app
+        document.getElementById('loading').style.display = 'none';
+        ReactDOM.render(<JetLagTracker />, document.getElementById('root'));
     </script>
 </body>
 </html>
