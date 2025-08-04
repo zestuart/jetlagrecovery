@@ -2,6 +2,7 @@
 """
 Jet Lag Recovery Tracker - Python Terminal Version
 Analyses Oura Ring data to track recovery from jet lag using physiological metrics.
+Uses airport codes for simple, reliable route calculation without external APIs.
 """
 
 import warnings
@@ -14,6 +15,87 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 import time
+
+
+class AirportDatabase:
+    """Handles airport timezone information and route calculations."""
+    
+    def __init__(self):
+        # Airport timezone database
+        self.airports = {
+            # Major UK airports
+            'LHR': {'timezone': 'Europe/London', 'offset': 0, 'city': 'London', 'longitude': -0.4543, 'name': 'Heathrow'},
+            'LGW': {'timezone': 'Europe/London', 'offset': 0, 'city': 'London', 'longitude': -0.1821, 'name': 'Gatwick'},
+            'STN': {'timezone': 'Europe/London', 'offset': 0, 'city': 'London', 'longitude': 0.235, 'name': 'Stansted'},
+            'LTN': {'timezone': 'Europe/London', 'offset': 0, 'city': 'London', 'longitude': -0.3686, 'name': 'Luton'},
+            'MAN': {'timezone': 'Europe/London', 'offset': 0, 'city': 'Manchester', 'longitude': -2.2750, 'name': 'Manchester'},
+            'EDI': {'timezone': 'Europe/London', 'offset': 0, 'city': 'Edinburgh', 'longitude': -3.3725, 'name': 'Edinburgh'},
+            
+            # Major US airports
+            'LAX': {'timezone': 'America/Los_Angeles', 'offset': -8, 'city': 'Los Angeles', 'longitude': -118.4085, 'name': 'Los Angeles Intl'},
+            'SFO': {'timezone': 'America/Los_Angeles', 'offset': -8, 'city': 'San Francisco', 'longitude': -122.3875, 'name': 'San Francisco Intl'},
+            'JFK': {'timezone': 'America/New_York', 'offset': -5, 'city': 'New York', 'longitude': -73.7781, 'name': 'John F Kennedy Intl'},
+            'LGA': {'timezone': 'America/New_York', 'offset': -5, 'city': 'New York', 'longitude': -73.8740, 'name': 'LaGuardia'},
+            'EWR': {'timezone': 'America/New_York', 'offset': -5, 'city': 'Newark', 'longitude': -74.1745, 'name': 'Newark Liberty Intl'},
+            'ORD': {'timezone': 'America/Chicago', 'offset': -6, 'city': 'Chicago', 'longitude': -87.9073, 'name': 'O\'Hare Intl'},
+            'DFW': {'timezone': 'America/Chicago', 'offset': -6, 'city': 'Dallas', 'longitude': -97.0372, 'name': 'Dallas/Fort Worth Intl'},
+            'DEN': {'timezone': 'America/Denver', 'offset': -7, 'city': 'Denver', 'longitude': -104.6737, 'name': 'Denver Intl'},
+            'SEA': {'timezone': 'America/Los_Angeles', 'offset': -8, 'city': 'Seattle', 'longitude': -122.3088, 'name': 'Seattle-Tacoma Intl'},
+            
+            # Major European airports
+            'CDG': {'timezone': 'Europe/Paris', 'offset': 1, 'city': 'Paris', 'longitude': 2.5479, 'name': 'Charles de Gaulle'},
+            'FRA': {'timezone': 'Europe/Berlin', 'offset': 1, 'city': 'Frankfurt', 'longitude': 8.5622, 'name': 'Frankfurt am Main'},
+            'AMS': {'timezone': 'Europe/Amsterdam', 'offset': 1, 'city': 'Amsterdam', 'longitude': 4.7683, 'name': 'Amsterdam Schiphol'},
+            'MAD': {'timezone': 'Europe/Madrid', 'offset': 1, 'city': 'Madrid', 'longitude': -3.5676, 'name': 'Madrid-Barajas'},
+            'BCN': {'timezone': 'Europe/Madrid', 'offset': 1, 'city': 'Barcelona', 'longitude': 2.0833, 'name': 'Barcelona-El Prat'},
+            'FCO': {'timezone': 'Europe/Rome', 'offset': 1, 'city': 'Rome', 'longitude': 12.2389, 'name': 'Rome Fiumicino'},
+            'ZUR': {'timezone': 'Europe/Zurich', 'offset': 1, 'city': 'Zurich', 'longitude': 8.5494, 'name': 'Zurich'},
+            
+            # Asian airports
+            'NRT': {'timezone': 'Asia/Tokyo', 'offset': 9, 'city': 'Tokyo', 'longitude': 140.3864, 'name': 'Narita Intl'},
+            'HND': {'timezone': 'Asia/Tokyo', 'offset': 9, 'city': 'Tokyo', 'longitude': 139.7798, 'name': 'Haneda'},
+            'ICN': {'timezone': 'Asia/Seoul', 'offset': 9, 'city': 'Seoul', 'longitude': 126.4417, 'name': 'Incheon Intl'},
+            'SIN': {'timezone': 'Asia/Singapore', 'offset': 8, 'city': 'Singapore', 'longitude': 103.9915, 'name': 'Singapore Changi'},
+            'HKG': {'timezone': 'Asia/Hong_Kong', 'offset': 8, 'city': 'Hong Kong', 'longitude': 113.9185, 'name': 'Hong Kong Intl'},
+            'PEK': {'timezone': 'Asia/Shanghai', 'offset': 8, 'city': 'Beijing', 'longitude': 116.5975, 'name': 'Beijing Capital Intl'},
+            'PVG': {'timezone': 'Asia/Shanghai', 'offset': 8, 'city': 'Shanghai', 'longitude': 121.8058, 'name': 'Shanghai Pudong Intl'},
+            
+            # Australian airports
+            'SYD': {'timezone': 'Australia/Sydney', 'offset': 10, 'city': 'Sydney', 'longitude': 151.1772, 'name': 'Sydney Kingsford Smith'},
+            'MEL': {'timezone': 'Australia/Melbourne', 'offset': 10, 'city': 'Melbourne', 'longitude': 144.8432, 'name': 'Melbourne'},
+            'PER': {'timezone': 'Australia/Perth', 'offset': 8, 'city': 'Perth', 'longitude': 115.9669, 'name': 'Perth'}
+        }
+    
+    def calculate_route_details(self, departure_code: str, arrival_code: str) -> Dict:
+        """Calculate route details from airport codes."""
+        departure_info = self.airports.get(departure_code)
+        arrival_info = self.airports.get(arrival_code)
+        
+        if not departure_info or not arrival_info:
+            raise ValueError(f"Airport data not available for {departure_code if not departure_info else arrival_code}")
+        
+        # Calculate timezone shift
+        timezone_shift = arrival_info['offset'] - departure_info['offset']
+        
+        # Determine direction based on longitude
+        direction = 'east' if arrival_info['longitude'] > departure_info['longitude'] else 'west'
+        
+        return {
+            'departure': {
+                'iata': departure_code,
+                'city': departure_info['city'],
+                'name': departure_info['name'],
+                'timezone': departure_info['timezone']
+            },
+            'arrival': {
+                'iata': arrival_code,
+                'city': arrival_info['city'],
+                'name': arrival_info['name'],
+                'timezone': arrival_info['timezone']
+            },
+            'timezone_shift': timezone_shift,
+            'direction': direction
+        }
 
 
 class OuraAPIClient:
@@ -50,7 +132,6 @@ class OuraAPIClient:
                 if sleep_response.status_code == 200:
                     sleep_data = sleep_response.json()
                     print(f"   Sleep records found: {len(sleep_data.get('data', []))}")
-                    print(f"   Full sleep response: {json.dumps(sleep_data, indent=2)[:500]}...")
                     
                     # Try a broader date range (last 7 days)
                     week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
@@ -78,13 +159,6 @@ class OuraAPIClient:
                         
                 else:
                     print(f"   Sleep API error: {sleep_response.text[:200]}")
-                    
-                # Also test what data scopes are available
-                print(f"🔍 Checking available data scopes...")
-                scopes_response = self.session.get(f"{self.BASE_URL}/usercollection/personal_info")
-                if scopes_response.status_code == 200:
-                    personal_data = scopes_response.json()
-                    print(f"   Available data in personal info: {list(personal_data.keys())}")
                     
                 return True
             elif response.status_code == 401:
@@ -262,7 +336,7 @@ class JetLagAnalyser:
     def adjusted_optimal_midpoint(self, timezone_shift: int) -> str:
         """Calculate optimal sleep midpoint for the destination timezone."""
         # Target should always be local optimal time (03:00), not shifted time
-        # The timezone_shift tells us how far we traveled, but we want to adapt to local time
+        # The timezone_shift tells us how far we travelled, but we want to adapt to local time
         base_hour = 3  # 03:00 optimal sleep midpoint in destination timezone
         return f"{base_hour:02d}:00"
     
@@ -403,22 +477,35 @@ class JetLagTracker:
     
     def __init__(self):
         self.oura_client = None
+        self.airport_db = AirportDatabase()
         self.analyser = JetLagAnalyser()
         self.recovery_data = []
         self.latest_debug_components = {}
+        self.route_details = None
     
-    def get_user_input(self) -> Tuple[str, str, str, int, str]:
-        """Collect user input for analysis."""
+    def get_user_input(self) -> Tuple[str, str, str, str]:
+        """Collect simplified user input for analysis."""
         print("\n📱 Jet Lag Recovery Tracker")
         print("=" * 50)
         
-        # API Token
+        # API Token with validation
+        print("\n🔑 Oura API Token")
+        print("   Get your token from: https://cloud.ouraring.com/personal-access-tokens")
         token = input("Enter your Oura API token: ").strip()
+        
+        # Basic validation to catch common input errors
         if not token:
             print("❌ API token is required")
             sys.exit(1)
+        elif len(token) < 20:
+            print("❌ API token seems too short (should be longer than 20 characters)")
+            sys.exit(1)
+        elif token.startswith('#') or 'import' in token or 'class' in token:
+            print("❌ It looks like you've pasted code instead of your API token")
+            print("   Please paste only your Oura API token (a long string of characters)")
+            sys.exit(1)
         
-        # Travel details
+        # Travel details (simplified airport-based input)
         print("\n✈️  Travel Details")
         departure = input("Departure date and time (YYYY-MM-DDTHH:MM): ").strip()
         try:
@@ -428,20 +515,53 @@ class JetLagTracker:
             print("❌ Invalid date format. Use YYYY-MM-DDTHH:MM")
             sys.exit(1)
         
-        destination = input("Destination: ").strip()
+        # Show available airports
+        print("\n🛫 Available airports:")
+        airports_by_region = {
+            'UK': ['LHR', 'LGW', 'STN', 'LTN', 'MAN', 'EDI'],
+            'US West': ['LAX', 'SFO', 'SEA'],
+            'US Central': ['ORD', 'DFW', 'DEN'],
+            'US East': ['JFK', 'LGA', 'EWR'],
+            'Europe': ['CDG', 'FRA', 'AMS', 'MAD', 'BCN', 'FCO', 'ZUR'],
+            'Asia': ['NRT', 'HND', 'ICN', 'SIN', 'HKG', 'PEK', 'PVG'],
+            'Australia': ['SYD', 'MEL', 'PER']
+        }
+        
+        for region, airports in airports_by_region.items():
+            print(f"   {region}: {', '.join(airports)}")
+        
+        departure_airport = input("\nDeparture airport (IATA code, e.g., SFO): ").strip().upper()
+        if departure_airport not in self.airport_db.airports:
+            print(f"❌ Airport '{departure_airport}' not supported")
+            print(f"   Supported airports: {', '.join(sorted(self.airport_db.airports.keys()))}")
+            sys.exit(1)
+        
+        arrival_airport = input("Arrival airport (IATA code, e.g., LHR): ").strip().upper()
+        if arrival_airport not in self.airport_db.airports:
+            print(f"❌ Airport '{arrival_airport}' not supported")
+            print(f"   Supported airports: {', '.join(sorted(self.airport_db.airports.keys()))}")
+            sys.exit(1)
+        
+        return token, departure, departure_airport, arrival_airport
+    
+    def calculate_route_details(self, departure_code: str, arrival_code: str) -> bool:
+        """Calculate route details from airport codes."""
+        print(f"🗺️  Calculating route details: {departure_code} → {arrival_code}")
         
         try:
-            timezone_shift = int(input("Timezone shift in hours (e.g., +8 for London from SF): "))
-        except ValueError:
-            print("❌ Invalid timezone shift")
-            sys.exit(1)
-        
-        direction = input("Travel direction (east/west): ").strip().lower()
-        if direction not in ['east', 'west']:
-            print("❌ Direction must be 'east' or 'west'")
-            sys.exit(1)
-        
-        return token, departure, destination, timezone_shift, direction
+            self.route_details = self.airport_db.calculate_route_details(departure_code, arrival_code)
+            
+            print(f"✅ Route calculated:")
+            print(f"   From: {self.route_details['departure']['city']} ({departure_code}) - {self.route_details['departure']['name']}")
+            print(f"   To: {self.route_details['arrival']['city']} ({arrival_code}) - {self.route_details['arrival']['name']}")
+            print(f"   Timezone shift: {self.route_details['timezone_shift']:+d} hours")
+            print(f"   Direction: {self.route_details['direction']}ward")
+            
+            return True
+            
+        except ValueError as e:
+            print(f"❌ Route calculation failed: {e}")
+            return False
     
     def generate_recommendations(self, recovery_score: float, direction: str, days_since_travel: int) -> List[str]:
         """Generate personalised recovery recommendations."""
@@ -599,6 +719,11 @@ class JetLagTracker:
         print("📈 JET LAG RECOVERY ANALYSIS")
         print("=" * 60)
         
+        # Show route information if available
+        if self.route_details:
+            print(f"\n✈️  Route: {self.route_details['departure']['city']} → {self.route_details['arrival']['city']}")
+            print(f"   Airports: {self.route_details['departure']['iata']} → {self.route_details['arrival']['iata']}")
+        
         # Recovery status
         status_emoji = "🎯" if current_recovery >= 90 else "🔶" if current_recovery >= 70 else "🔴"
         print(f"\n{status_emoji} Current Recovery: {current_recovery:.1f}%")
@@ -683,8 +808,8 @@ class JetLagTracker:
     def run(self):
         """Main application execution."""
         try:
-            # Get user input
-            token, departure, destination, timezone_shift, direction = self.get_user_input()
+            # Get simplified user input
+            token, departure, departure_airport, arrival_airport = self.get_user_input()
             
             # Initialise Oura client
             self.oura_client = OuraAPIClient(token)
@@ -692,6 +817,21 @@ class JetLagTracker:
             # Verify API access
             if not self.oura_client.verify_endpoints():
                 sys.exit(1)
+            
+            # Calculate route details from airport codes
+            if not self.calculate_route_details(departure_airport, arrival_airport):
+                sys.exit(1)
+            
+            # Use calculated route data
+            destination = f"{self.route_details['arrival']['city']} ({arrival_airport})"
+            timezone_shift = self.route_details['timezone_shift']
+            direction = self.route_details['direction']
+            
+            print(f"\n📋 Travel Summary:")
+            print(f"   Route: {self.route_details['departure']['city']} → {self.route_details['arrival']['city']}")
+            print(f"   Airports: {departure_airport} → {arrival_airport}")
+            print(f"   Timezone shift: {timezone_shift:+d} hours")
+            print(f"   Direction: {direction}ward")
             
             # Fetch and analyse data
             if not self.fetch_recovery_data(departure, timezone_shift):
