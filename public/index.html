@@ -47,9 +47,15 @@
                 loadSavedTripDetails();
             }, []);
 
+            // Configurable baseline values (can be enhanced later with user settings)
             const baseline = {
-                avgRestingHr: 52,
-                avgSleepEfficiency: 88
+                avgRestingHr: 52,        // Default: 52 bpm (can be configured)
+                avgSleepEfficiency: 88   // Default: 88% (can be configured)
+            };
+            
+            // Function to update baselines based on user's pre-travel data (future enhancement)
+            const updateBaselines = (newBaselines) => {
+                Object.assign(baseline, newBaselines);
             };
 
             // API Key Management Functions
@@ -191,17 +197,36 @@
             };
 
             const calculateRecoveryScore = (ouraData, timezoneShift, daysSinceTravel) => {
-                if (daysSinceTravel === 0) return { score: 100, components: {} };
+                if (daysSinceTravel === 0) {
+                    // Day 0 should reflect travel impact, not automatic 100%
+                    const timezoneImpact = Math.min(Math.abs(timezoneShift) * 10, 40); // Max 40% penalty
+                    const travelScore = Math.max(60, 100 - timezoneImpact); // Minimum 60% on travel day
+                    return { score: travelScore, components: { travelImpact: timezoneImpact } };
+                }
+                
                 if (!ouraData.hasData) return null;
 
                 let totalWeight = 0;
                 let weightedScore = 0;
                 const components = {};
+                
+                // Track data availability for penalties
+                const dataAvailability = {
+                    hasSleep: !!(ouraData.sleep?.bedtime_start && ouraData.sleep?.bedtime_end),
+                    hasSleepEfficiency: !!(ouraData.sleep?.efficiency),
+                    hasHeartRate: !!(ouraData.heartrate?.bpm),
+                    hasReadiness: !!(ouraData.readiness?.temperature_trend_deviation !== null && ouraData.readiness?.temperature_trend_deviation !== undefined)
+                };
 
-                // Body clock alignment (40% weight)
-                if (ouraData.sleep?.bedtime_start && ouraData.sleep?.bedtime_end) {
+                // Body clock alignment (40% weight) - Enhanced with sleep duration penalty
+                if (dataAvailability.hasSleep) {
                     const sleepMidpoint = calculateSleepMidpoint(ouraData.sleep);
                     if (sleepMidpoint) {
+                        // Calculate sleep duration
+                        const start = new Date(ouraData.sleep.bedtime_start);
+                        const end = new Date(ouraData.sleep.bedtime_end);
+                        const sleepDurationHours = (end - start) / (1000 * 60 * 60);
+                        
                         const targetMidpoint = "03:00"; // Target local optimal time
                         const timeDiff = timeDifferenceHours(sleepMidpoint, targetMidpoint);
                         
@@ -213,12 +238,26 @@
                         } else {
                             alignment = Math.max(0, 100 - timeDiff * 15);
                         }
+                        
+                        // Apply sleep duration penalty
+                        let durationPenalty = 0;
+                        if (sleepDurationHours < 4) {
+                            durationPenalty = 50; // Severe penalty for < 4 hours
+                        } else if (sleepDurationHours < 6) {
+                            durationPenalty = 30; // Moderate penalty for < 6 hours
+                        } else if (sleepDurationHours < 7) {
+                            durationPenalty = 15; // Light penalty for < 7 hours
+                        }
+                        
+                        alignment = Math.max(0, alignment - durationPenalty);
 
                         components.sleepAlignment = {
                             score: alignment,
                             sleepMidpoint,
                             targetMidpoint: "03:00",
-                            timeDiffHours: timeDiff
+                            timeDiffHours: timeDiff,
+                            sleepDurationHours: sleepDurationHours,
+                            durationPenalty: durationPenalty
                         };
 
                         weightedScore += alignment * 0.4;
@@ -280,22 +319,67 @@
                     totalWeight += 0.2;
                 }
 
-                // Sleep efficiency (15% weight)
-                if (ouraData.sleep?.efficiency) {
-                    const sleepQuality = Math.min(100, (ouraData.sleep.efficiency / baseline.avgSleepEfficiency) * 100);
+                // Sleep efficiency (15% weight) - Enhanced with aggressive penalties
+                if (dataAvailability.hasSleepEfficiency) {
+                    let sleepQuality = Math.min(100, (ouraData.sleep.efficiency / baseline.avgSleepEfficiency) * 100);
+                    
+                    // Apply more aggressive penalties for poor sleep efficiency
+                    if (ouraData.sleep.efficiency < 60) {
+                        sleepQuality = Math.max(0, sleepQuality - 40); // Severe penalty for < 60%
+                    } else if (ouraData.sleep.efficiency < 70) {
+                        sleepQuality = Math.max(0, sleepQuality - 25); // Moderate penalty for < 70%
+                    } else if (ouraData.sleep.efficiency < 80) {
+                        sleepQuality = Math.max(0, sleepQuality - 10); // Light penalty for < 80%
+                    }
 
                     components.sleepQuality = {
                         score: sleepQuality,
                         efficiency: ouraData.sleep.efficiency,
-                        baseline: baseline.avgSleepEfficiency
+                        baseline: baseline.avgSleepEfficiency,
+                        penaltyApplied: ouraData.sleep.efficiency < 80
                     };
 
                     weightedScore += sleepQuality * 0.15;
                     totalWeight += 0.15;
                 }
 
-                const finalScore = totalWeight > 0.3 ? (weightedScore / totalWeight) : null;
-                return { score: finalScore, components };
+                // Apply critical missing data penalties
+                let finalScore = totalWeight > 0.3 ? (weightedScore / totalWeight) : null;
+                let penalties = [];
+                
+                if (finalScore !== null) {
+                    // Critical sleep data missing penalty
+                    if (!dataAvailability.hasSleep && !dataAvailability.hasSleepEfficiency) {
+                        finalScore *= 0.5; // 50% penalty for no sleep data
+                        penalties.push("No sleep data: -50%");
+                    } else if (!dataAvailability.hasSleep) {
+                        finalScore *= 0.7; // 30% penalty for missing sleep timing
+                        penalties.push("Missing sleep timing: -30%");
+                    } else if (!dataAvailability.hasSleepEfficiency) {
+                        finalScore *= 0.85; // 15% penalty for missing sleep efficiency
+                        penalties.push("Missing sleep efficiency: -15%");
+                    }
+                    
+                    // Data completeness penalty - don't allow weight redistribution to inflate scores
+                    const expectedComponents = 4; // sleep alignment, heart rate, temperature, sleep efficiency
+                    const actualComponents = Object.keys(components).length;
+                    if (actualComponents < expectedComponents) {
+                        const completenessRatio = actualComponents / expectedComponents;
+                        const completenessBonus = Math.min(completenessRatio, 1.0);
+                        finalScore *= (0.7 + (completenessBonus * 0.3)); // Scale between 70% and 100%
+                        penalties.push(`Data completeness (${actualComponents}/${expectedComponents}): ${Math.round((0.7 + completenessBonus * 0.3) * 100)}%`);
+                    }
+                    
+                    // Ensure score doesn't exceed reasonable bounds
+                    finalScore = Math.max(0, Math.min(100, finalScore));
+                }
+
+                return { 
+                    score: finalScore, 
+                    components: components,
+                    penalties: penalties,
+                    dataAvailability: dataAvailability
+                };
             };
 
             const generateRecommendations = (recoveryScore, direction, daysSinceTravel) => {
@@ -435,15 +519,17 @@
                     
                     setDebugInfo(prev => prev + `\nTravel: ${travelDate.toLocaleDateString()}, Days since: ${daysSinceTravel}`);
                     
-                    // Baseline
+                    // Travel day (Day 0) with realistic impact
+                    const travelDayResult = calculateRecoveryScore({hasData: true}, routeDetails.timezoneShift, 0);
                     data.push({
                         day: 0,
                         date: travelDate.toLocaleDateString('en-GB'),
-                        recovery: 100,
+                        recovery: travelDayResult.score,
                         sleepEfficiency: baseline.avgSleepEfficiency,
                         restingHr: baseline.avgRestingHr,
                         tempDeviation: 0,
-                        isBaseline: true
+                        isBaseline: true,
+                        travelImpact: travelDayResult.components.travelImpact
                     });
                     
                     const daysToFetch = Math.min(daysSinceTravel, 14);
@@ -474,10 +560,14 @@
                                         trainingVolume: ouraData.activity?.training_volume || null,
                                         isBaseline: false,
                                         dataQuality: ouraData.dataQuality,
-                                        components: recoveryResult.components
+                                        components: recoveryResult.components,
+                                        penalties: recoveryResult.penalties,
+                                        dataAvailability: recoveryResult.dataAvailability
                                     });
                                     successfulDataPoints++;
-                                    setDebugInfo(prev => prev + `\nDay ${day}: Recovery ${Math.round(recoveryResult.score)}%`);
+                                    
+                                    const penaltyText = recoveryResult.penalties?.length > 0 ? ` (${recoveryResult.penalties.join(', ')})` : '';
+                                    setDebugInfo(prev => prev + `\nDay ${day}: Recovery ${Math.round(recoveryResult.score)}%${penaltyText}`);
                                 }
                             }
                         } catch (apiError) {
@@ -1054,81 +1144,6 @@
                                     </div>
                                 </div>
 
-                                {/* Component Breakdown */}
-                                {Object.keys(componentBreakdown).length > 0 && (
-                                    <div className="bg-white rounded-xl shadow-lg p-6">
-                                        <h3 className="text-lg font-semibold mb-4">Recovery Component Breakdown</h3>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            {componentBreakdown.sleepAlignment && (
-                                                <div className="p-4 bg-blue-50 rounded-lg">
-                                                    <div className="flex items-center gap-2 mb-2">
-                                                        <span className="text-blue-600">🕐</span>
-                                                        <span className="font-medium text-blue-800">Sleep Alignment (40%)</span>
-                                                    </div>
-                                                    <div className="text-2xl font-bold text-blue-600 mb-1">
-                                                        {Math.round(componentBreakdown.sleepAlignment.score)}%
-                                                    </div>
-                                                    <div className="text-xs text-blue-600">
-                                                        Sleep: {componentBreakdown.sleepAlignment.sleepMidpoint} | Target: {componentBreakdown.sleepAlignment.targetMidpoint}
-                                                    </div>
-                                                    <div className="text-xs text-blue-600">
-                                                        Difference: {componentBreakdown.sleepAlignment.timeDiffHours.toFixed(1)}h
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {componentBreakdown.hrRecovery && (
-                                                <div className="p-4 bg-red-50 rounded-lg">
-                                                    <div className="flex items-center gap-2 mb-2">
-                                                        <span className="text-red-600">♥</span>
-                                                        <span className="font-medium text-red-800">Heart Rate (25%)</span>
-                                                    </div>
-                                                    <div className="text-2xl font-bold text-red-600 mb-1">
-                                                        {Math.round(componentBreakdown.hrRecovery.score)}%
-                                                    </div>
-                                                    <div className="text-xs text-red-600">
-                                                        Current: {Math.round(componentBreakdown.hrRecovery.currentHr)} | Baseline: {componentBreakdown.hrRecovery.baselineHr}
-                                                    </div>
-                                                    {componentBreakdown.activityLoad && (
-                                                        <div className="text-xs text-red-600">
-                                                            Activity adjustment: +{componentBreakdown.activityLoad.hrAdjustment} bpm
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {componentBreakdown.tempAlignment && (
-                                                <div className="p-4 bg-orange-50 rounded-lg">
-                                                    <div className="flex items-center gap-2 mb-2">
-                                                        <span className="text-orange-600">🌡️</span>
-                                                        <span className="font-medium text-orange-800">Temperature (20%)</span>
-                                                    </div>
-                                                    <div className="text-2xl font-bold text-orange-600 mb-1">
-                                                        {Math.round(componentBreakdown.tempAlignment.score)}%
-                                                    </div>
-                                                    <div className="text-xs text-orange-600">
-                                                        Deviation: {componentBreakdown.tempAlignment.deviation >= 0 ? '+' : ''}{componentBreakdown.tempAlignment.deviation.toFixed(2)}°C
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {componentBreakdown.sleepQuality && (
-                                                <div className="p-4 bg-purple-50 rounded-lg">
-                                                    <div className="flex items-center gap-2 mb-2">
-                                                        <span className="text-purple-600">😴</span>
-                                                        <span className="font-medium text-purple-800">Sleep Quality (15%)</span>
-                                                    </div>
-                                                    <div className="text-2xl font-bold text-purple-600 mb-1">
-                                                        {Math.round(componentBreakdown.sleepQuality.score)}%
-                                                    </div>
-                                                    <div className="text-xs text-purple-600">
-                                                        Efficiency: {Math.round(componentBreakdown.sleepQuality.efficiency)}% | Baseline: {componentBreakdown.sleepQuality.baseline}%
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
 
                                 {/* Recommendations */}
                                 {recommendations.length > 0 && (
@@ -1397,6 +1412,82 @@
                                             recovery progress, and physiological data.
                                         </p>
                                     </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Component Breakdown */}
+                        {Object.keys(componentBreakdown).length > 0 && (
+                            <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                                <h3 className="text-lg font-semibold mb-4">Recovery Component Breakdown</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {componentBreakdown.sleepAlignment && (
+                                        <div className="p-4 bg-blue-50 rounded-lg">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="text-blue-600">🕐</span>
+                                                <span className="font-medium text-blue-800">Sleep Alignment (40%)</span>
+                                            </div>
+                                            <div className="text-2xl font-bold text-blue-600 mb-1">
+                                                {Math.round(componentBreakdown.sleepAlignment.score)}%
+                                            </div>
+                                            <div className="text-xs text-blue-600">
+                                                Sleep: {componentBreakdown.sleepAlignment.sleepMidpoint} | Target: {componentBreakdown.sleepAlignment.targetMidpoint}
+                                            </div>
+                                            <div className="text-xs text-blue-600">
+                                                Difference: {componentBreakdown.sleepAlignment.timeDiffHours.toFixed(1)}h
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {componentBreakdown.hrRecovery && (
+                                        <div className="p-4 bg-red-50 rounded-lg">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="text-red-600">♥</span>
+                                                <span className="font-medium text-red-800">Heart Rate (25%)</span>
+                                            </div>
+                                            <div className="text-2xl font-bold text-red-600 mb-1">
+                                                {Math.round(componentBreakdown.hrRecovery.score)}%
+                                            </div>
+                                            <div className="text-xs text-red-600">
+                                                Current: {Math.round(componentBreakdown.hrRecovery.currentHr)} | Baseline: {componentBreakdown.hrRecovery.baselineHr}
+                                            </div>
+                                            {componentBreakdown.activityLoad && (
+                                                <div className="text-xs text-red-600">
+                                                    Activity adjustment: +{componentBreakdown.activityLoad.hrAdjustment} bpm
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {componentBreakdown.tempAlignment && (
+                                        <div className="p-4 bg-orange-50 rounded-lg">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="text-orange-600">🌡️</span>
+                                                <span className="font-medium text-orange-800">Temperature (20%)</span>
+                                            </div>
+                                            <div className="text-2xl font-bold text-orange-600 mb-1">
+                                                {Math.round(componentBreakdown.tempAlignment.score)}%
+                                            </div>
+                                            <div className="text-xs text-orange-600">
+                                                Deviation: {componentBreakdown.tempAlignment.deviation >= 0 ? '+' : ''}{componentBreakdown.tempAlignment.deviation.toFixed(2)}°C
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {componentBreakdown.sleepQuality && (
+                                        <div className="p-4 bg-purple-50 rounded-lg">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="text-purple-600">😴</span>
+                                                <span className="font-medium text-purple-800">Sleep Quality (15%)</span>
+                                            </div>
+                                            <div className="text-2xl font-bold text-purple-600 mb-1">
+                                                {Math.round(componentBreakdown.sleepQuality.score)}%
+                                            </div>
+                                            <div className="text-xs text-purple-600">
+                                                Efficiency: {Math.round(componentBreakdown.sleepQuality.efficiency)}% | Baseline: {componentBreakdown.sleepQuality.baseline}%
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}
