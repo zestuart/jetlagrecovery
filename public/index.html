@@ -841,59 +841,187 @@
                                     </div>
                                 )}
 
-                                {/* Recovery Data Table */}
+                                {/* Recovery Data Graph */}
                                 <div className="bg-white rounded-xl shadow-lg p-6">
-                                    <h3 className="text-lg font-semibold mb-4">Recovery Data Summary</h3>
-                                    <div className="overflow-x-auto">
-                                        <table className="min-w-full text-sm">
-                                            <thead>
-                                                <tr className="border-b">
-                                                    <th className="text-left py-2">Day</th>
-                                                    <th className="text-left py-2">Date</th>
-                                                    <th className="text-left py-2">Recovery %</th>
-                                                    <th className="text-left py-2">Sleep Eff %</th>
-                                                    <th className="text-left py-2">Resting HR</th>
-                                                    <th className="text-left py-2">Temp Dev</th>
-                                                    <th className="text-left py-2">Active Cal</th>
-                                                    <th className="text-left py-2">Data Sources</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {recoveryData.map((d, i) => (
-                                                    <tr key={i} className="border-b hover:bg-gray-50">
-                                                        <td className="py-2 font-medium">{d.day}</td>
-                                                        <td className="py-2">{d.date}</td>
-                                                        <td className="py-2">
-                                                            {d.recovery ? (
-                                                                <span className={`font-medium ${
-                                                                    d.recovery > 80 ? 'text-green-600' : 
-                                                                    d.recovery > 60 ? 'text-yellow-600' : 'text-red-600'
-                                                                }`}>
-                                                                    {Math.round(d.recovery)}
-                                                                </span>
-                                                            ) : '-'}
-                                                        </td>
-                                                        <td className="py-2">{d.sleepEfficiency ? Math.round(d.sleepEfficiency) : '-'}</td>
-                                                        <td className="py-2">{d.restingHr ? Math.round(d.restingHr) : '-'}</td>
-                                                        <td className="py-2">
-                                                            {d.tempDeviation !== null && d.tempDeviation !== undefined ? 
-                                                                `${d.tempDeviation >= 0 ? '+' : ''}${d.tempDeviation.toFixed(2)}°C` : 
-                                                                '-'}
-                                                        </td>
-                                                        <td className="py-2">{d.activeCalories || '-'}</td>
-                                                        <td className="py-2">
-                                                            {d.isBaseline ? 'Baseline' : 
-                                                             d.dataQuality ? [
-                                                                 d.dataQuality.hasSleep ? 'Sleep' : null,
-                                                                 d.dataQuality.hasHeartRate ? 'HR' : null,
-                                                                 d.dataQuality.hasReadiness ? 'Readiness' : null,
-                                                                 d.dataQuality.hasActivity ? 'Activity' : null
-                                                             ].filter(Boolean).join(', ') : 'None'}
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
+                                    <h3 className="text-lg font-semibold mb-4">Recovery Progress Chart</h3>
+                                    <div className="space-y-6">
+                                        {/* Recovery Score Chart */}
+                                        <div>
+                                            <h4 className="text-md font-medium mb-3 text-indigo-700">Recovery Score Over Time</h4>
+                                            <div className="relative h-64 bg-gray-50 rounded-lg p-4">
+                                                <svg viewBox="0 0 800 200" className="w-full h-full">
+                                                    {/* Grid lines */}
+                                                    {[0, 25, 50, 75, 100].map(y => (
+                                                        <g key={y}>
+                                                            <line 
+                                                                x1="50" y1={190 - (y * 1.4)} 
+                                                                x2="750" y2={190 - (y * 1.4)} 
+                                                                stroke="#e5e7eb" strokeWidth="1"
+                                                            />
+                                                            <text x="40" y={195 - (y * 1.4)} fontSize="12" fill="#6b7280" textAnchor="end">
+                                                                {y}%
+                                                            </text>
+                                                        </g>
+                                                    ))}
+                                                    
+                                                    {/* Recovery line */}
+                                                    <polyline
+                                                        points={recoveryData.map((d, i) => {
+                                                            const x = 50 + (i * (700 / Math.max(recoveryData.length - 1, 1)));
+                                                            const y = d.recovery ? 190 - (d.recovery * 1.4) : null;
+                                                            return y ? `${x},${y}` : null;
+                                                        }).filter(Boolean).join(' ')}
+                                                        fill="none"
+                                                        stroke="#4f46e5"
+                                                        strokeWidth="3"
+                                                        strokeLinecap="round"
+                                                        strokeLinejoin="round"
+                                                    />
+                                                    
+                                                    {/* Data points */}
+                                                    {recoveryData.map((d, i) => {
+                                                        if (!d.recovery) return null;
+                                                        const x = 50 + (i * (700 / Math.max(recoveryData.length - 1, 1)));
+                                                        const y = 190 - (d.recovery * 1.4);
+                                                        return (
+                                                            <g key={i}>
+                                                                <circle 
+                                                                    cx={x} cy={y} r="6" 
+                                                                    fill={d.recovery > 80 ? '#22c55e' : d.recovery > 60 ? '#f59e0b' : '#ef4444'}
+                                                                    stroke="white" strokeWidth="2"
+                                                                />
+                                                                <text x={x} y="210" fontSize="10" fill="#6b7280" textAnchor="middle">
+                                                                    Day {d.day}
+                                                                </text>
+                                                            </g>
+                                                        );
+                                                    })}
+                                                </svg>
+                                            </div>
+                                        </div>
+
+                                        {/* Multi-metric Chart */}
+                                        <div>
+                                            <h4 className="text-md font-medium mb-3 text-gray-700">Key Metrics Comparison</h4>
+                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                                {/* Sleep Efficiency */}
+                                                <div className="bg-purple-50 rounded-lg p-4">
+                                                    <h5 className="text-sm font-medium text-purple-800 mb-2">Sleep Efficiency</h5>
+                                                    <div className="space-y-2">
+                                                        {recoveryData.filter(d => !d.isBaseline && d.sleepEfficiency).map((d, i) => (
+                                                            <div key={i} className="flex items-center gap-2">
+                                                                <span className="text-xs text-purple-600 w-12">Day {d.day}</span>
+                                                                <div className="flex-1 bg-purple-200 rounded-full h-2">
+                                                                    <div 
+                                                                        className="bg-purple-600 h-2 rounded-full transition-all duration-500"
+                                                                        style={{width: `${d.sleepEfficiency}%`}}
+                                                                    ></div>
+                                                                </div>
+                                                                <span className="text-xs text-purple-800 w-10">{Math.round(d.sleepEfficiency)}%</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Heart Rate Deviation */}
+                                                <div className="bg-red-50 rounded-lg p-4">
+                                                    <h5 className="text-sm font-medium text-red-800 mb-2">Resting Heart Rate</h5>
+                                                    <div className="space-y-2">
+                                                        {recoveryData.filter(d => !d.isBaseline && d.restingHr).map((d, i) => {
+                                                            const deviation = Math.abs(d.restingHr - baseline.avgRestingHr);
+                                                            const maxDeviation = 20; // Max expected deviation for scaling
+                                                            const barWidth = Math.min((deviation / maxDeviation) * 100, 100);
+                                                            return (
+                                                                <div key={i} className="flex items-center gap-2">
+                                                                    <span className="text-xs text-red-600 w-12">Day {d.day}</span>
+                                                                    <div className="flex-1 bg-red-200 rounded-full h-2">
+                                                                        <div 
+                                                                            className={`h-2 rounded-full transition-all duration-500 ${
+                                                                                deviation <= 5 ? 'bg-green-500' : 
+                                                                                deviation <= 10 ? 'bg-yellow-500' : 'bg-red-600'
+                                                                            }`}
+                                                                            style={{width: `${barWidth}%`}}
+                                                                        ></div>
+                                                                    </div>
+                                                                    <span className="text-xs text-red-800 w-16">{Math.round(d.restingHr)} bpm</span>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+
+                                                {/* Temperature Deviation */}
+                                                <div className="bg-orange-50 rounded-lg p-4">
+                                                    <h5 className="text-sm font-medium text-orange-800 mb-2">Temperature Deviation</h5>
+                                                    <div className="space-y-2">
+                                                        {recoveryData.filter(d => !d.isBaseline && d.tempDeviation !== null && d.tempDeviation !== undefined).map((d, i) => {
+                                                            const absDeviation = Math.abs(d.tempDeviation);
+                                                            const maxDeviation = 1.0; // Max expected deviation for scaling
+                                                            const barWidth = Math.min((absDeviation / maxDeviation) * 100, 100);
+                                                            return (
+                                                                <div key={i} className="flex items-center gap-2">
+                                                                    <span className="text-xs text-orange-600 w-12">Day {d.day}</span>
+                                                                    <div className="flex-1 bg-orange-200 rounded-full h-2">
+                                                                        <div 
+                                                                            className={`h-2 rounded-full transition-all duration-500 ${
+                                                                                absDeviation <= 0.1 ? 'bg-green-500' : 
+                                                                                absDeviation <= 0.3 ? 'bg-yellow-500' : 'bg-orange-600'
+                                                                            }`}
+                                                                            style={{width: `${barWidth}%`}}
+                                                                        ></div>
+                                                                    </div>
+                                                                    <span className="text-xs text-orange-800 w-16">
+                                                                        {d.tempDeviation >= 0 ? '+' : ''}{d.tempDeviation.toFixed(2)}°C
+                                                                    </span>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+
+                                                {/* Activity Level */}
+                                                <div className="bg-green-50 rounded-lg p-4">
+                                                    <h5 className="text-sm font-medium text-green-800 mb-2">Active Calories</h5>
+                                                    <div className="space-y-2">
+                                                        {recoveryData.filter(d => !d.isBaseline && d.activeCalories).map((d, i) => {
+                                                            const maxCalories = 1000; // Max expected calories for scaling
+                                                            const barWidth = Math.min((d.activeCalories / maxCalories) * 100, 100);
+                                                            return (
+                                                                <div key={i} className="flex items-center gap-2">
+                                                                    <span className="text-xs text-green-600 w-12">Day {d.day}</span>
+                                                                    <div className="flex-1 bg-green-200 rounded-full h-2">
+                                                                        <div 
+                                                                            className="bg-green-600 h-2 rounded-full transition-all duration-500"
+                                                                            style={{width: `${barWidth}%`}}
+                                                                        ></div>
+                                                                    </div>
+                                                                    <span className="text-xs text-green-800 w-16">{d.activeCalories} cal</span>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Legend */}
+                                        <div className="bg-gray-50 rounded-lg p-4">
+                                            <h5 className="text-sm font-medium text-gray-700 mb-2">Chart Legend</h5>
+                                            <div className="flex flex-wrap gap-4 text-xs">
+                                                <div className="flex items-center gap-1">
+                                                    <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                                                    <span>Excellent (80%+)</span>
+                                                </div>
+                                                <div className="flex items-center gap-1">
+                                                    <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
+                                                    <span>Good (60-80%)</span>
+                                                </div>
+                                                <div className="flex items-center gap-1">
+                                                    <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                                                    <span>Needs Attention (&lt;60%)</span>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
