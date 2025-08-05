@@ -12,6 +12,7 @@ warnings.filterwarnings('ignore', message='urllib3 v2 only supports OpenSSL 1.1.
 import requests
 import json
 import sys
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 import time
@@ -482,28 +483,75 @@ class JetLagTracker:
         self.recovery_data = []
         self.latest_debug_components = {}
         self.route_details = None
+        self.config_file = os.path.join(os.path.expanduser('~'), '.jetlag_config.json')
+    
+    def save_api_key(self, api_key: str) -> bool:
+        """Save API key to config file."""
+        try:
+            config = {'oura_api_key': api_key}
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            os.chmod(self.config_file, 0o600)  # Make file readable only by owner
+            return True
+        except Exception as e:
+            print(f"Warning: Could not save API key: {e}")
+            return False
+    
+    def load_api_key(self) -> Optional[str]:
+        """Load API key from config file."""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                return config.get('oura_api_key')
+        except Exception as e:
+            print(f"Warning: Could not load saved API key: {e}")
+        return None
     
     def get_user_input(self) -> Tuple[str, str, str, str]:
         """Collect simplified user input for analysis."""
         print("\n📱 Jet Lag Recovery Tracker")
         print("=" * 50)
         
-        # API Token with validation
+        # API Token with validation and saving
         print("\n🔑 Oura API Token")
-        print("   Get your token from: https://cloud.ouraring.com/personal-access-tokens")
-        token = input("Enter your Oura API token: ").strip()
         
-        # Basic validation to catch common input errors
+        # Try to load saved API key first
+        saved_token = self.load_api_key()
+        if saved_token:
+            print(f"   Found saved API key (ends with ...{saved_token[-8:]})")
+            use_saved = input("   Use saved API key? (y/n): ").strip().lower()
+            if use_saved in ['y', 'yes', '']:
+                token = saved_token
+            else:
+                token = None
+        else:
+            token = None
+        
+        # If no saved token or user chose not to use it, prompt for new one
         if not token:
-            print("❌ API token is required")
-            sys.exit(1)
-        elif len(token) < 20:
-            print("❌ API token seems too short (should be longer than 20 characters)")
-            sys.exit(1)
-        elif token.startswith('#') or 'import' in token or 'class' in token:
-            print("❌ It looks like you've pasted code instead of your API token")
-            print("   Please paste only your Oura API token (a long string of characters)")
-            sys.exit(1)
+            print("   Get your token from: https://cloud.ouraring.com/personal-access-tokens")
+            token = input("Enter your Oura API token: ").strip()
+            
+            # Basic validation to catch common input errors
+            if not token:
+                print("❌ API token is required")
+                sys.exit(1)
+            elif len(token) < 20:
+                print("❌ API token seems too short (should be longer than 20 characters)")
+                sys.exit(1)
+            elif token.startswith('#') or 'import' in token or 'class' in token:
+                print("❌ It looks like you've pasted code instead of your API token")
+                print("   Please paste only your Oura API token (a long string of characters)")
+                sys.exit(1)
+            
+            # Ask if user wants to save the API key
+            save_key = input("   Save this API key for future use? (y/n): ").strip().lower()
+            if save_key in ['y', 'yes', '']:
+                if self.save_api_key(token):
+                    print("   ✅ API key saved successfully")
+                else:
+                    print("   ⚠️  Could not save API key (will need to enter again next time)")
         
         # Travel details (simplified airport-based input)
         print("\n✈️  Travel Details")

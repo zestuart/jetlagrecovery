@@ -22,6 +22,8 @@
 
         function JetLagTracker() {
             const [ouraToken, setOuraToken] = useState('');
+            const [savedApiKey, setSavedApiKey] = useState(null);
+            const [showApiKeyManager, setShowApiKeyManager] = useState(false);
             const [airports, setAirports] = useState({});
             const [routeData, setRouteData] = useState({
                 departureDate: '',
@@ -37,15 +39,132 @@
             const [error, setError] = useState('');
             const [debugInfo, setDebugInfo] = useState('App loaded successfully');
 
-            // Load airports on mount
+            // Load airports, saved API key, and trip details on mount
             useEffect(() => {
                 console.log('Loading airports...');
                 fetchAirports();
+                loadSavedApiKey();
+                loadSavedTripDetails();
             }, []);
 
             const baseline = {
                 avgRestingHr: 52,
                 avgSleepEfficiency: 88
+            };
+
+            // API Key Management Functions
+            const loadSavedApiKey = async () => {
+                try {
+                    const response = await fetch('/api/apikey/load');
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.hasKey) {
+                            setSavedApiKey(data.keyPreview);
+                            setDebugInfo(prev => prev + `\nFound saved API key: ${data.keyPreview}`);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error loading saved API key:', error);
+                }
+            };
+
+            const saveApiKey = async (apiKey) => {
+                try {
+                    const response = await fetch('/api/apikey/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ apiKey })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        setDebugInfo(prev => prev + `\n✅ ${data.message}`);
+                        loadSavedApiKey(); // Refresh saved key info
+                        return true;
+                    } else {
+                        const errorData = await response.json();
+                        setError(`Failed to save API key: ${errorData.error}`);
+                        return false;
+                    }
+                } catch (error) {
+                    setError(`Error saving API key: ${error.message}`);
+                    return false;
+                }
+            };
+
+            const removeSavedApiKey = async () => {
+                try {
+                    const response = await fetch('/api/apikey', { method: 'DELETE' });
+                    if (response.ok) {
+                        setSavedApiKey(null);
+                        setOuraToken('');
+                        setDebugInfo(prev => prev + '\n🗑️ Saved API key removed');
+                    }
+                } catch (error) {
+                    setError(`Error removing API key: ${error.message}`);
+                }
+            };
+
+            const useSavedApiKey = () => {
+                // Use saved key for requests (the server will handle this automatically)
+                setOuraToken(''); // Clear manual input
+                setShowApiKeyManager(false);
+                setDebugInfo(prev => prev + '\n🔑 Using saved API key for requests');
+            };
+
+            // Trip Details Management Functions
+            const loadSavedTripDetails = async () => {
+                try {
+                    const response = await fetch('/api/trip/load');
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.hasTrip) {
+                            const tripDetails = data.tripDetails;
+                            setRouteData({
+                                departureDate: tripDetails.departureDate || '',
+                                departureAirport: tripDetails.departureAirport || '',
+                                arrivalAirport: tripDetails.arrivalAirport || ''
+                            });
+                            setDebugInfo(prev => prev + `\n📋 Loaded saved trip: ${tripDetails.departureAirport} → ${tripDetails.arrivalAirport}`);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error loading saved trip details:', error);
+                }
+            };
+
+            const saveTripDetails = async (tripDetails) => {
+                try {
+                    const response = await fetch('/api/trip/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tripDetails })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        setDebugInfo(prev => prev + `\n✅ ${data.message}`);
+                        return true;
+                    } else {
+                        const errorData = await response.json();
+                        setError(`Failed to save trip details: ${errorData.error}`);
+                        return false;
+                    }
+                } catch (error) {
+                    setError(`Error saving trip details: ${error.message}`);
+                    return false;
+                }
+            };
+
+            const clearSavedTripDetails = async () => {
+                try {
+                    const response = await fetch('/api/trip', { method: 'DELETE' });
+                    if (response.ok) {
+                        setDebugInfo(prev => prev + '\n🗑️ Saved trip details cleared');
+                    }
+                } catch (error) {
+                    setError(`Error clearing trip details: ${error.message}`);
+                }
             };
 
             const calculateSleepMidpoint = (sleepData) => {
@@ -229,12 +348,15 @@
             };
 
             const fetchOuraData = async (date) => {
-                const response = await fetch(`/api/oura/combined/${date}`, {
-                    headers: {
-                        'Authorization': `Bearer ${ouraToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
+                const headers = { 'Content-Type': 'application/json' };
+                
+                // Add authorization header only if manual token is provided
+                if (ouraToken.trim()) {
+                    headers['Authorization'] = `Bearer ${ouraToken}`;
+                }
+                // If no manual token, the server will use saved key automatically
+
+                const response = await fetch(`/api/oura/combined/${date}`, { headers });
 
                 if (!response.ok) {
                     const errorData = await response.json();
@@ -291,8 +413,8 @@
             };
 
             const startTracking = async () => {
-                if (!ouraToken.trim()) {
-                    setError('Please enter your Ōura API token first');
+                if (!ouraToken.trim() && !savedApiKey) {
+                    setError('Please enter your Ōura API token or save one first');
                     return;
                 }
 
@@ -387,8 +509,8 @@
             };
 
             const testAPI = async () => {
-                if (!ouraToken.trim()) {
-                    setError('Please enter your Ōura API token first');
+                if (!ouraToken.trim() && !savedApiKey) {
+                    setError('Please enter your Ōura API token or save one first');
                     return;
                 }
 
@@ -397,12 +519,15 @@
                 setDebugInfo('Testing API connection...');
 
                 try {
-                    const response = await fetch('/api/oura/test', {
-                        headers: {
-                            'Authorization': `Bearer ${ouraToken}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
+                    const headers = { 'Content-Type': 'application/json' };
+                    
+                    // Add authorization header only if manual token is provided
+                    if (ouraToken.trim()) {
+                        headers['Authorization'] = `Bearer ${ouraToken}`;
+                    }
+                    // If no manual token, the server will use saved key automatically
+
+                    const response = await fetch('/api/oura/test', { headers });
 
                     if (!response.ok) {
                         const errorData = await response.json();
@@ -449,6 +574,20 @@
             useEffect(() => {
                 calculateRoute();
             }, [routeData.departureAirport, routeData.arrivalAirport]);
+
+            // Auto-save trip details when route data changes (with debouncing)
+            useEffect(() => {
+                const hasCompleteTrip = routeData.departureDate && routeData.departureAirport && routeData.arrivalAirport;
+                
+                if (hasCompleteTrip) {
+                    // Debounce saving to avoid too many API calls
+                    const timeoutId = setTimeout(() => {
+                        saveTripDetails(routeData);
+                    }, 1000); // Save after 1 second of no changes
+                    
+                    return () => clearTimeout(timeoutId);
+                }
+            }, [routeData.departureDate, routeData.departureAirport, routeData.arrivalAirport]);
 
             function AirportSelector({ value, onChange, placeholder }) {
                 const [isOpen, setIsOpen] = useState(false);
@@ -500,6 +639,122 @@
                 );
             }
 
+            function ApiKeyManager() {
+                const [newApiKey, setNewApiKey] = useState('');
+                const [isSaving, setIsSaving] = useState(false);
+
+                const handleSaveApiKey = async () => {
+                    if (!newApiKey.trim()) {
+                        setError('Please enter an API key');
+                        return;
+                    }
+
+                    if (newApiKey.length < 20) {
+                        setError('API key seems too short (should be longer than 20 characters)');
+                        return;
+                    }
+
+                    setIsSaving(true);
+                    const success = await saveApiKey(newApiKey);
+                    if (success) {
+                        setNewApiKey('');
+                        setShowApiKeyManager(false);
+                    }
+                    setIsSaving(false);
+                };
+
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                        <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md mx-4">
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-lg font-semibold">API Key Manager</h3>
+                                <button 
+                                    onClick={() => setShowApiKeyManager(false)}
+                                    className="text-gray-400 hover:text-gray-600"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+
+                            {savedApiKey ? (
+                                <div className="space-y-4">
+                                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <span className="text-green-600">✅</span>
+                                            <span className="font-medium text-green-800">Saved API Key</span>
+                                        </div>
+                                        <p className="text-sm text-green-700 mb-3">
+                                            Key ending with: <code className="bg-green-100 px-1 rounded">{savedApiKey}</code>
+                                        </p>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={useSavedApiKey}
+                                                className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700"
+                                            >
+                                                Use This Key
+                                            </button>
+                                            <button
+                                                onClick={removeSavedApiKey}
+                                                className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
+                                            >
+                                                Remove Key
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="border-t pt-4">
+                                        <p className="text-sm text-gray-600 mb-3">Or save a new API key:</p>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="mb-4">
+                                    <p className="text-sm text-gray-600 mb-3">
+                                        Save your Ōura API key securely for future use.
+                                    </p>
+                                </div>
+                            )}
+
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Ōura API Token
+                                    </label>
+                                    <input
+                                        type="password"
+                                        value={newApiKey}
+                                        onChange={(e) => setNewApiKey(e.target.value)}
+                                        placeholder="Enter your Ōura API token"
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        Get your token from{' '}
+                                        <a href="https://cloud.ouraring.com/personal-access-tokens" className="text-indigo-600 hover:underline" target="_blank" rel="noopener noreferrer">
+                                            Ōura Cloud
+                                        </a>
+                                    </p>
+                                </div>
+
+                                <div className="flex gap-2 justify-end">
+                                    <button
+                                        onClick={() => setShowApiKeyManager(false)}
+                                        className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleSaveApiKey}
+                                        disabled={isSaving || !newApiKey.trim()}
+                                        className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                    >
+                                        {isSaving ? 'Saving...' : 'Save API Key'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
             return (
                 <div className="min-h-screen gradient-bg p-6">
                     <div className="max-w-4xl mx-auto">
@@ -522,40 +777,101 @@
 
                         {/* Token Input */}
                         <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-                            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                                <span className="text-red-500">♥</span>
-                                Ōura API Token
-                            </h2>
-                            <input
-                                type="password"
-                                value={ouraToken}
-                                onChange={(e) => setOuraToken(e.target.value)}
-                                placeholder="Enter your Ōura API token"
-                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4"
-                            />
-                            <p className="text-xs text-gray-500 mb-4">
-                                Get your token from{' '}
-                                <a href="https://cloud.ouraring.com/personal-access-tokens" className="text-indigo-600 hover:underline" target="_blank" rel="noopener noreferrer">
-                                    Ōura Cloud
-                                </a>
-                            </p>
-                            {ouraToken && (
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-xl font-semibold flex items-center gap-2">
+                                    <span className="text-red-500">♥</span>
+                                    Ōura API Token
+                                </h2>
                                 <button
-                                    onClick={testAPI}
-                                    disabled={loading}
-                                    className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                    onClick={() => setShowApiKeyManager(true)}
+                                    className="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded-md flex items-center gap-1"
                                 >
-                                    {loading ? 'Testing...' : 'Test API Connection'}
+                                    <span>🔑</span>
+                                    Manage Keys
                                 </button>
+                            </div>
+
+                            {savedApiKey && !ouraToken ? (
+                                <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-green-600">✅</span>
+                                            <span className="font-medium text-green-800">Using Saved API Key</span>
+                                        </div>
+                                        <span className="text-sm text-green-700 bg-green-100 px-2 py-1 rounded">
+                                            {savedApiKey}
+                                        </span>
+                                    </div>
+                                    <p className="text-sm text-green-700 mt-2">
+                                        Your saved API key will be used automatically for all requests.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div>
+                                    <input
+                                        type="password"
+                                        value={ouraToken}
+                                        onChange={(e) => setOuraToken(e.target.value)}
+                                        placeholder={savedApiKey ? "Enter token to override saved key" : "Enter your Ōura API token"}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4"
+                                    />
+                                    <div className="flex items-center justify-between mb-4">
+                                        <p className="text-xs text-gray-500">
+                                            Get your token from{' '}
+                                            <a href="https://cloud.ouraring.com/personal-access-tokens" className="text-indigo-600 hover:underline" target="_blank" rel="noopener noreferrer">
+                                                Ōura Cloud
+                                            </a>
+                                        </p>
+                                        {ouraToken && (
+                                            <button
+                                                onClick={async () => {
+                                                    const success = await saveApiKey(ouraToken);
+                                                    if (success) {
+                                                        setOuraToken('');
+                                                    }
+                                                }}
+                                                className="text-xs text-indigo-600 hover:text-indigo-800"
+                                            >
+                                                Save this key
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
                             )}
+
+                            <button
+                                onClick={testAPI}
+                                disabled={loading}
+                                className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                            >
+                                {loading ? 'Testing...' : 'Test API Connection'}
+                            </button>
                         </div>
 
                         {/* Route Selection */}
                         <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-                            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                                <span className="text-blue-500">📍</span>
-                                Route Selection
-                            </h2>
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-xl font-semibold flex items-center gap-2">
+                                    <span className="text-blue-500">📍</span>
+                                    Route Selection
+                                </h2>
+                                {(routeData.departureDate || routeData.departureAirport || routeData.arrivalAirport) && (
+                                    <button
+                                        onClick={() => {
+                                            setRouteData({
+                                                departureDate: '',
+                                                departureAirport: '',
+                                                arrivalAirport: ''
+                                            });
+                                            setRouteDetails(null);
+                                            clearSavedTripDetails();
+                                        }}
+                                        className="text-sm text-gray-500 hover:text-gray-700 px-2 py-1 rounded"
+                                    >
+                                        Clear Trip
+                                    </button>
+                                )}
+                            </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -590,6 +906,16 @@
                                 </div>
                             </div>
                             
+                            {/* Trip Auto-Save Status */}
+                            {(routeData.departureDate && routeData.departureAirport && routeData.arrivalAirport) && (
+                                <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
+                                    <div className="flex items-center gap-2 text-sm text-green-700">
+                                        <span>💾</span>
+                                        <span>Trip details auto-saved and will persist on page reload</span>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Route Details */}
                             {routeDetails && (
                                 <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
@@ -1083,6 +1409,9 @@
                             </div>
                         </div>
                     </div>
+
+                    {/* API Key Manager Modal */}
+                    {showApiKeyManager && <ApiKeyManager />}
                 </div>
             );
         }

@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -51,6 +53,48 @@ const AIRPORT_DATABASE = {
   'PER': { timezone: 'Australia/Perth', offset: 8, city: 'Perth', longitude: 115.9669, name: 'Perth' }
 };
 
+// API Key Management
+const CONFIG_FILE = path.join(process.env.HOME || process.env.USERPROFILE || '/tmp', '.jetlag_config.json');
+
+const loadConfig = () => {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      return config;
+    }
+  } catch (error) {
+    console.error('Failed to load config:', error.message);
+  }
+  return {};
+};
+
+const saveConfig = (config) => {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    fs.chmodSync(CONFIG_FILE, 0o600); // Make file readable only by owner
+    return true;
+  } catch (error) {
+    console.error('Failed to save config:', error.message);
+    return false;
+  }
+};
+
+const saveApiKey = (apiKey) => {
+  try {
+    const config = loadConfig();
+    config.oura_api_key = apiKey;
+    return saveConfig(config);
+  } catch (error) {
+    console.error('Failed to save API key:', error.message);
+    return false;
+  }
+};
+
+const loadApiKey = () => {
+  const config = loadConfig();
+  return config.oura_api_key || null;
+};
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -77,6 +121,153 @@ const handleOuraAPIError = (error, operation) => {
     return { error: `Network error: ${error.message}`, status: 500 };
   }
 };
+
+// API Key Management endpoints
+app.post('/api/apikey/save', (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    
+    if (!apiKey) {
+      return res.status(400).json({ error: 'API key is required' });
+    }
+    
+    // Basic validation
+    if (apiKey.length < 20) {
+      return res.status(400).json({ error: 'API key seems too short (should be longer than 20 characters)' });
+    }
+    
+    const saved = saveApiKey(apiKey);
+    if (saved) {
+      res.json({ success: true, message: 'API key saved successfully' });
+    } else {
+      res.status(500).json({ error: 'Failed to save API key - check server logs for details' });
+    }
+  } catch (error) {
+    console.error('API key save error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/apikey/load', (req, res) => {
+  try {
+    const apiKey = loadApiKey();
+    if (apiKey) {
+      // Return only the last 8 characters for security
+      res.json({ 
+        hasKey: true, 
+        keyPreview: `...${apiKey.slice(-8)}` 
+      });
+    } else {
+      res.json({ hasKey: false });
+    }
+  } catch (error) {
+    console.error('API key load error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.delete('/api/apikey', (req, res) => {
+  try {
+    const config = loadConfig();
+    delete config.oura_api_key;
+    
+    if (Object.keys(config).length > 0) {
+      // Save remaining config
+      const saved = saveConfig(config);
+      if (saved) {
+        res.json({ success: true, message: 'API key removed successfully' });
+      } else {
+        res.status(500).json({ error: 'Failed to update config file' });
+      }
+    } else {
+      // Remove entire config file if empty
+      if (fs.existsSync(CONFIG_FILE)) {
+        fs.unlinkSync(CONFIG_FILE);
+      }
+      res.json({ success: true, message: 'API key removed successfully' });
+    }
+  } catch (error) {
+    console.error('API key delete error:', error);
+    res.status(500).json({ error: 'Failed to remove API key' });
+  }
+});
+
+// Trip Details Management endpoints
+app.post('/api/trip/save', (req, res) => {
+  try {
+    const { tripDetails } = req.body;
+    
+    if (!tripDetails) {
+      return res.status(400).json({ error: 'Trip details are required' });
+    }
+    
+    // Validate trip details structure
+    const requiredFields = ['departureDate', 'departureAirport', 'arrivalAirport'];
+    for (const field of requiredFields) {
+      if (!tripDetails[field]) {
+        return res.status(400).json({ error: `${field} is required` });
+      }
+    }
+    
+    const config = loadConfig();
+    config.last_trip = {
+      ...tripDetails,
+      saved_at: new Date().toISOString()
+    };
+    
+    const saved = saveConfig(config);
+    if (saved) {
+      res.json({ success: true, message: 'Trip details saved successfully' });
+    } else {
+      res.status(500).json({ error: 'Failed to save trip details' });
+    }
+  } catch (error) {
+    console.error('Trip save error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/trip/load', (req, res) => {
+  try {
+    const config = loadConfig();
+    if (config.last_trip) {
+      res.json({ 
+        hasTrip: true, 
+        tripDetails: config.last_trip
+      });
+    } else {
+      res.json({ hasTrip: false });
+    }
+  } catch (error) {
+    console.error('Trip load error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.delete('/api/trip', (req, res) => {
+  try {
+    const config = loadConfig();
+    delete config.last_trip;
+    
+    if (Object.keys(config).length > 0) {
+      const saved = saveConfig(config);
+      if (saved) {
+        res.json({ success: true, message: 'Trip details removed successfully' });
+      } else {
+        res.status(500).json({ error: 'Failed to update config file' });
+      }
+    } else {
+      // Remove entire config file if empty
+      if (fs.existsSync(CONFIG_FILE)) {
+        fs.unlinkSync(CONFIG_FILE);
+      }
+      res.json({ success: true, message: 'Trip details removed successfully' });
+    }
+  } catch (error) {
+    console.error('Trip delete error:', error);
+    res.status(500).json({ error: 'Failed to remove trip details' });
+  }
+});
 
 // Airport and route endpoints
 app.get('/api/airports', (req, res) => {
@@ -144,10 +335,16 @@ app.post('/api/route/calculate', (req, res) => {
 // Enhanced Ōura API endpoints
 app.get('/api/oura/test', async (req, res) => {
   try {
-    const { authorization } = req.headers;
+    let { authorization } = req.headers;
     
+    // If no authorization header, try to use saved API key
     if (!authorization) {
-      return res.status(401).json({ error: 'Authorization header required' });
+      const savedKey = loadApiKey();
+      if (savedKey) {
+        authorization = `Bearer ${savedKey}`;
+      } else {
+        return res.status(401).json({ error: 'No API key provided. Please provide Authorization header or save an API key.' });
+      }
     }
     
     const response = await axios.get('https://api.ouraring.com/v2/usercollection/personal_info', {
@@ -172,10 +369,16 @@ app.get('/api/oura/test', async (req, res) => {
 app.get('/api/oura/combined/:date', async (req, res) => {
   try {
     const { date } = req.params;
-    const { authorization } = req.headers;
+    let { authorization } = req.headers;
     
+    // If no authorization header, try to use saved API key
     if (!authorization) {
-      return res.status(401).json({ error: 'Authorization header required' });
+      const savedKey = loadApiKey();
+      if (savedKey) {
+        authorization = `Bearer ${savedKey}`;
+      } else {
+        return res.status(401).json({ error: 'No API key provided. Please provide Authorization header or save an API key.' });
+      }
     }
 
     const headers = {
@@ -278,7 +481,17 @@ app.get('/api/oura/combined/:date', async (req, res) => {
 app.get('/api/oura/activity/:date', async (req, res) => {
   try {
     const { date } = req.params;
-    const { authorization } = req.headers;
+    let { authorization } = req.headers;
+    
+    // If no authorization header, try to use saved API key
+    if (!authorization) {
+      const savedKey = loadApiKey();
+      if (savedKey) {
+        authorization = `Bearer ${savedKey}`;
+      } else {
+        return res.status(401).json({ error: 'No API key provided. Please provide Authorization header or save an API key.' });
+      }
+    }
     
     const targetDate = new Date(date);
     const startDate = new Date(targetDate.getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
