@@ -1,6 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 require('dotenv').config();
 
 const app = express();
@@ -49,6 +52,23 @@ const AIRPORT_DATABASE = {
   'SYD': { timezone: 'Australia/Sydney', offset: 10, city: 'Sydney', longitude: 151.1772, name: 'Sydney Kingsford Smith' },
   'MEL': { timezone: 'Australia/Melbourne', offset: 10, city: 'Melbourne', longitude: 144.8432, name: 'Melbourne' },
   'PER': { timezone: 'Australia/Perth', offset: 8, city: 'Perth', longitude: 115.9669, name: 'Perth' }
+};
+
+// API Key Management
+const getConfigDir = () => {
+  const configDir = path.join(os.homedir(), '.jetlag-tracker');
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+  return configDir;
+};
+
+const getApiKeyPath = () => {
+  return path.join(getConfigDir(), 'api-key.json');
+};
+
+const getFlightDataPath = () => {
+  return path.join(getConfigDir(), 'flight-data.json');
 };
 
 // Middleware
@@ -141,10 +161,153 @@ app.post('/api/route/calculate', (req, res) => {
   }
 });
 
+// API Key Management Endpoints
+app.post('/api/apikey/save', (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    
+    if (!apiKey || typeof apiKey !== 'string') {
+      return res.status(400).json({ error: 'Valid API key is required' });
+    }
+    
+    const apiKeyPath = getApiKeyPath();
+    const keyData = {
+      key: apiKey,
+      savedAt: new Date().toISOString()
+    };
+    
+    fs.writeFileSync(apiKeyPath, JSON.stringify(keyData, null, 2));
+    
+    res.json({ 
+      success: true, 
+      message: 'API key saved successfully',
+      keyPreview: `${apiKey.substring(0, 8)}...${apiKey.substring(apiKey.length - 4)}`
+    });
+  } catch (error) {
+    console.error('Error saving API key:', error);
+    res.status(500).json({ error: 'Failed to save API key' });
+  }
+});
+
+app.get('/api/apikey/load', (req, res) => {
+  try {
+    const apiKeyPath = getApiKeyPath();
+    
+    if (!fs.existsSync(apiKeyPath)) {
+      return res.json({ hasKey: false });
+    }
+    
+    const keyData = JSON.parse(fs.readFileSync(apiKeyPath, 'utf8'));
+    const keyPreview = `${keyData.key.substring(0, 8)}...${keyData.key.substring(keyData.key.length - 4)}`;
+    
+    res.json({ 
+      hasKey: true, 
+      keyPreview,
+      savedAt: keyData.savedAt
+    });
+  } catch (error) {
+    console.error('Error loading API key:', error);
+    res.status(500).json({ error: 'Failed to load API key' });
+  }
+});
+
+app.delete('/api/apikey', (req, res) => {
+  try {
+    const apiKeyPath = getApiKeyPath();
+    
+    if (fs.existsSync(apiKeyPath)) {
+      fs.unlinkSync(apiKeyPath);
+    }
+    
+    res.json({ success: true, message: 'API key removed successfully' });
+  } catch (error) {
+    console.error('Error removing API key:', error);
+    res.status(500).json({ error: 'Failed to remove API key' });
+  }
+});
+
+// Flight Data Management Endpoints
+app.post('/api/flight/save', (req, res) => {
+  try {
+    const { departure, arrival, travelDate } = req.body;
+    
+    if (!departure || !arrival || !travelDate) {
+      return res.status(400).json({ error: 'Departure, arrival, and travel date are required' });
+    }
+    
+    const flightDataPath = getFlightDataPath();
+    const flightData = {
+      departure,
+      arrival,
+      travelDate,
+      savedAt: new Date().toISOString()
+    };
+    
+    fs.writeFileSync(flightDataPath, JSON.stringify(flightData, null, 2));
+    
+    res.json({ 
+      success: true, 
+      message: 'Flight data saved successfully',
+      data: flightData
+    });
+  } catch (error) {
+    console.error('Error saving flight data:', error);
+    res.status(500).json({ error: 'Failed to save flight data' });
+  }
+});
+
+app.get('/api/flight/load', (req, res) => {
+  try {
+    const flightDataPath = getFlightDataPath();
+    
+    if (!fs.existsSync(flightDataPath)) {
+      return res.json({ hasData: false });
+    }
+    
+    const flightData = JSON.parse(fs.readFileSync(flightDataPath, 'utf8'));
+    
+    res.json({ 
+      hasData: true, 
+      data: flightData
+    });
+  } catch (error) {
+    console.error('Error loading flight data:', error);
+    res.status(500).json({ error: 'Failed to load flight data' });
+  }
+});
+
+app.delete('/api/flight', (req, res) => {
+  try {
+    const flightDataPath = getFlightDataPath();
+    
+    if (fs.existsSync(flightDataPath)) {
+      fs.unlinkSync(flightDataPath);
+    }
+    
+    res.json({ success: true, message: 'Flight data removed successfully' });
+  } catch (error) {
+    console.error('Error removing flight data:', error);
+    res.status(500).json({ error: 'Failed to remove flight data' });
+  }
+});
+
 // Enhanced Ōura API endpoints
 app.get('/api/oura/test', async (req, res) => {
   try {
-    const { authorization } = req.headers;
+    let { authorization } = req.headers;
+    
+    // Try to use saved API key if no authorization header provided
+    if (!authorization) {
+      try {
+        const apiKeyPath = getApiKeyPath();
+        if (fs.existsSync(apiKeyPath)) {
+          const keyData = JSON.parse(fs.readFileSync(apiKeyPath, 'utf8'));
+          authorization = `Bearer ${keyData.key}`;
+        }
+      } catch (error) {
+        console.error('Error loading saved API key:', error);
+      }
+    }
     
     if (!authorization) {
       return res.status(401).json({ error: 'Authorization header required' });
@@ -172,7 +335,20 @@ app.get('/api/oura/test', async (req, res) => {
 app.get('/api/oura/combined/:date', async (req, res) => {
   try {
     const { date } = req.params;
-    const { authorization } = req.headers;
+    let { authorization } = req.headers;
+    
+    // Try to use saved API key if no authorization header provided
+    if (!authorization) {
+      try {
+        const apiKeyPath = getApiKeyPath();
+        if (fs.existsSync(apiKeyPath)) {
+          const keyData = JSON.parse(fs.readFileSync(apiKeyPath, 'utf8'));
+          authorization = `Bearer ${keyData.key}`;
+        }
+      } catch (error) {
+        console.error('Error loading saved API key:', error);
+      }
+    }
     
     if (!authorization) {
       return res.status(401).json({ error: 'Authorization header required' });

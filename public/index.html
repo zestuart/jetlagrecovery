@@ -121,17 +121,17 @@
             // Trip Details Management Functions
             const loadSavedTripDetails = async () => {
                 try {
-                    const response = await fetch('/api/trip/load');
+                    const response = await fetch('/api/flight/load');
                     if (response.ok) {
                         const data = await response.json();
-                        if (data.hasTrip) {
-                            const tripDetails = data.tripDetails;
+                        if (data.hasData) {
+                            const flightData = data.data;
                             setRouteData({
-                                departureDate: tripDetails.departureDate || '',
-                                departureAirport: tripDetails.departureAirport || '',
-                                arrivalAirport: tripDetails.arrivalAirport || ''
+                                departureDate: flightData.travelDate || '',
+                                departureAirport: flightData.departure || '',
+                                arrivalAirport: flightData.arrival || ''
                             });
-                            setDebugInfo(prev => prev + `\n📋 Loaded saved trip: ${tripDetails.departureAirport} → ${tripDetails.arrivalAirport}`);
+                            setDebugInfo(prev => prev + `\n📋 Loaded saved trip: ${flightData.departure} → ${flightData.arrival}`);
                         }
                     }
                 } catch (error) {
@@ -141,10 +141,14 @@
 
             const saveTripDetails = async (tripDetails) => {
                 try {
-                    const response = await fetch('/api/trip/save', {
+                    const response = await fetch('/api/flight/save', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ tripDetails })
+                        body: JSON.stringify({ 
+                            departure: tripDetails.departureAirport,
+                            arrival: tripDetails.arrivalAirport,
+                            travelDate: tripDetails.departureDate
+                        })
                     });
                     
                     if (response.ok) {
@@ -215,7 +219,7 @@
                     hasSleep: !!(ouraData.sleep?.bedtime_start && ouraData.sleep?.bedtime_end),
                     hasSleepEfficiency: !!(ouraData.sleep?.efficiency),
                     hasHeartRate: !!(ouraData.heartrate?.bpm),
-                    hasReadiness: !!(ouraData.readiness?.temperature_trend_deviation !== null && ouraData.readiness?.temperature_trend_deviation !== undefined)
+                    hasReadiness: !!(ouraData.readiness && (ouraData.readiness.temperature_trend_deviation !== null && ouraData.readiness.temperature_trend_deviation !== undefined) || (ouraData.readiness.temperature_deviation !== null && ouraData.readiness.temperature_deviation !== undefined))
                 };
 
                 // Body clock alignment (40% weight) - Enhanced with sleep duration penalty
@@ -306,8 +310,8 @@
                 }
 
                 // Temperature rhythm (20% weight)
-                if (ouraData.readiness?.temperature_trend_deviation !== null && ouraData.readiness?.temperature_trend_deviation !== undefined) {
-                    const tempDeviation = ouraData.readiness.temperature_trend_deviation;
+                const tempDeviation = ouraData.readiness?.temperature_trend_deviation || ouraData.readiness?.temperature_deviation;
+                if (tempDeviation !== null && tempDeviation !== undefined) {
                     const tempAlignment = Math.abs(tempDeviation) <= 0.1 ? 100 : Math.max(0, 100 - (Math.abs(tempDeviation) - 0.1) * 200);
 
                     components.tempAlignment = {
@@ -555,7 +559,7 @@
                                         recovery: recoveryResult.score,
                                         sleepEfficiency: ouraData.sleep?.efficiency || null,
                                         restingHr: ouraData.heartrate?.bpm || null,
-                                        tempDeviation: ouraData.readiness?.temperature_trend_deviation || null,
+                                        tempDeviation: ouraData.readiness?.temperature_trend_deviation || ouraData.readiness?.temperature_deviation || null,
                                         activeCalories: ouraData.activity?.active_calories || null,
                                         trainingVolume: ouraData.activity?.training_volume || null,
                                         isBaseline: false,
@@ -1128,6 +1132,18 @@
                                                 </span>
                                                 <span className="font-medium">
                                                     {recoveryData[recoveryData.length - 1]?.activeCalories || 'No data'}
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between items-center">
+                                                <span className="flex items-center gap-2 text-sm">
+                                                    <span className="text-orange-500">🌡️</span>
+                                                    Temperature Deviation
+                                                </span>
+                                                <span className="font-medium">
+                                                    {recoveryData[recoveryData.length - 1]?.tempDeviation !== null && 
+                                                     recoveryData[recoveryData.length - 1]?.tempDeviation !== undefined ? 
+                                                        `${recoveryData[recoveryData.length - 1].tempDeviation > 0 ? '+' : ''}${recoveryData[recoveryData.length - 1].tempDeviation.toFixed(2)}°C` : 
+                                                        'No data'}
                                                 </span>
                                             </div>
                                         </div>
